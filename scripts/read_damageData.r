@@ -76,6 +76,7 @@ rm(a,b)
 damageData$comb <- rbindlist(damageData$daily, use.names = TRUE, fill = T)
 
 
+## 2.2 TREAT THE DATA ----
   ## Tidy Titles ##
 c <- names(damageData$comb)
 c <- str_remove_all(string = c, pattern = "Sum of ")
@@ -91,18 +92,20 @@ damageData$totals <- damageData$comb[State %like% "Grand Total"]
 damageData$comb <- damageData$comb[!State %like% "Grand Total"]
 
 
-## 2.2 PLOT TRENDS ----
+
+  ## Prepare Long Table ##
 damageData$gg$state <- melt(data = damageData$comb, id.vars = c("State", "sheet", "date"),
-                      variable.name = "metric", value.name = "value")
+                            variable.name = "metric", value.name = "value")
 damageData$gg$totals <- melt(data = damageData$totals, id.vars = c("State", "sheet", "date"),
                              variable.name = "metric", value.name = "value")
 
-
+  ## Calculate Differences Over the Time Period ##
 e <- damageData$gg$state[,.(min=min(value), max=max(value)), by=.(State, metric)]
 e[,diff:=max-min]
 damageData$diff <- e ; rm(e)
 
 
+## 2.3 PLOT TRENDS ----
 damageData$plots$trends <- ggplot(data=damageData$gg$state, aes(x=date, y=value, colour=State)) +
   geom_line() +
   facet_wrap(~metric, scales = "free") +
@@ -118,3 +121,20 @@ damageData$plots$totals <- ggplot(data=damageData$gg$totals, aes(x=date, y=value
   scale_y_continuous(labels = comma) +
   theme_classic()
 damageData$plots$totals
+
+
+## 3.0 FLOW DATA -----------------------------------------------------------
+## 3.1 READ SPREADSHEETS ----
+gaugeData <- list()
+
+
+gaugeData$raw <- data.table(read_excel(path = iFile$gauge, sheet = 1))
+
+gaugeData$plots$all <- ggplot(data=gaugeData$raw) +
+  geom_line(aes(x=Date1, y = `Distance to Danger Level (cm)`,
+                colour=Lat, group=factor(Sr))) +
+  coord_cartesian(expand = F) +
+  labs(title = "Flow Gauge Data", subtitle = iFile$gauge) +
+  theme_classic()
+gaugeData$plots$all
+
