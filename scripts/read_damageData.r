@@ -16,6 +16,19 @@ iFile$gauge <- file.path("inputs","Stations+ River Water Levels.xlsx")
 
 sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed")
 
+
+  ## GIS ##
+iFile$GIS$inp$admn3_mimu$dsn <- file.path("..","..","1-data","Exposure", "Admin Boundaries")
+iFile$GIS$inp$admn3_mimu$layer <- "mmr_polbnda_adm3_250k_mimu"
+
+iFile$GIS$inp$adm1_mimu <- file.path("..","..","1-data","Exposure", 
+                                     "Admin Boundaries", "mmr_polbnda2_adm1_250k_mimu")
+
+iFile$gauge_ENG <- file.path("inputs","Stations+ River Water Levels_ENG.xlsx")
+
+
+
+
 ## Packages --
 if(!require(data.table)) {
   install.packages("data.table")
@@ -55,6 +68,23 @@ if(!require(ggrepel)) {
 if(!require(scales)) {
   install.packages("scales")
   library(scales)
+}
+
+
+  ## GIS ##
+if(!require(sf)) {
+  install.packages("sf")
+  library(sf)
+}
+
+if(!require(leaflet)) {
+  install.packages("leaflet")
+  library(leaflet)
+}
+
+if(!require(leaflet.minicharts)) {
+  install.packages("leaflet.minicharts")
+  library(leaflet.minicharts)
 }
 
 
@@ -116,7 +146,6 @@ damageData$plots$trends
 
 damageData$plots$totals <- ggplot(data=damageData$gg$totals, aes(x=date, y=value)) +
   geom_line() +
-#  geom_label_repel(data=damageData$diff, aes(x=max(damageData$gg$totals$date), y = max, label=State)) +
   facet_wrap(~metric, scales = "free") +
   scale_y_continuous(labels = comma) +
   theme_classic()
@@ -126,15 +155,76 @@ damageData$plots$totals
 ## 3.0 FLOW DATA -----------------------------------------------------------
 ## 3.1 READ SPREADSHEETS ----
 gaugeData <- list()
-
-
 gaugeData$raw <- data.table(read_excel(path = iFile$gauge, sheet = 1))
 
+
+## 3.2 ADD STATE NAME TO GAUGE POINTS ----
+  ## read in shapefiles ##
+GIS <- list()
+GIS$inp$adm1_mimu <- st_read(dsn=iFile$GIS$inp$adm1_mimu)
+
+  ## plot gauge locations ##
+GIS$m$gaugePoints <- leaflet(data = ) %>%
+  addTiles() %>%
+  addPolygons(data=GIS$inp$adm1_mimu) %>%
+  addCircles(data = gaugeData$raw, lng = ~Lon, lat = ~Lat)
+GIS$m$gaugePoints
+
+  ## identify which stations in which admin 1 (spatial join on state) ##
+b <- st_as_sf(x = gaugeData$raw, coords = c("Lon", "Lat"),  #convert data.table with lat-long to spatial object
+              crs=st_crs(GIS$inp$adm1_mimu))                #obtain the CRS of the admin layer to set other layers as the same
+nrow(gaugeData$raw)
+nrow(b)
+st_is(b, "POINT")
+View(b)
+
+c <- st_join(x = b, y = GIS$inp$adm1_mimu, left=TRUE)       #
+st_is(c, "POINT")
+nrow(c)
+View(c)
+gaugeData$shp <- c
+gaugeData$shp$Lat <- st_coordinates(gaugeData$shape)[,2]
+gaugeData$shp$Lon <- st_coordinates(gaugeData$shape)[,1]
+gaugeData$raw <- data.table(gaugeData$shp)
+View(d)
+
+
+## 3.2 PLOT ----
 gaugeData$plots$all <- ggplot(data=gaugeData$raw) +
   geom_line(aes(x=Date1, y = `Distance to Danger Level (cm)`,
                 colour=Lat, group=factor(Sr))) +
+  geom_hline(yintercept = 0, linetype="dashed", alpha=0.2) +
   coord_cartesian(expand = F) +
   labs(title = "Flow Gauge Data", subtitle = iFile$gauge) +
   theme_classic()
 gaugeData$plots$all
+
+gaugeData$plots$states <- gaugeData$plots$all +
+  facet_wrap(.~ST)
+gaugeData$plots$states
+
+
+
+## 4.0 SENTINEL DATA ------------------------------------------------------------------------
+
+
+
+
+
+## 4.0 MAP DATA --------------------------------------------------------------------------
+## 4.1 READ IN SHAPEFILES ----
+
+  ## read in shapefiles ##
+GIS$inp$admn3_mimu <- st_read(dsn = iFile$GIS$inp$admn3_mimu$dsn, 
+                                 layer = iFile$GIS$inp$admn3_mimu$layer)
+
+  ## plot flow with time ##
+GIS$m$flowTime <- leaflet() %>%
+  addTiles() %>%
+  addMinicharts(lng = gaugeData$raw$Lon, lat = gaugeData$raw$Lat, chartdata = gaugeData$raw$`WaterLevel cm`,
+                showLabels = T, time = gaugeData$raw$Date1)
+GIS$m$flowTime
+
+
+
 
