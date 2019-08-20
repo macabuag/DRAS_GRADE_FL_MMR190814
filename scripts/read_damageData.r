@@ -14,18 +14,17 @@ iFile <- list()
 iFile$damageData <- file.path("..","Spreadsheets","Damage Observations", "Damage Observations190819.xlsx")
 iFile$gauge <- file.path("inputs","Stations+ River Water Levels.xlsx")
 
-sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed")
+sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed")
+resultsRange <- "AD3:AI18"
 
-
-  ## GIS ##
+## GIS ##
 iFile$GIS$inp$admn3_mimu$dsn <- file.path("..","..","1-data","Exposure", "Admin Boundaries")
 iFile$GIS$inp$admn3_mimu$layer <- "mmr_polbnda_adm3_250k_mimu"
 
 iFile$GIS$inp$adm1_mimu <- file.path("..","..","1-data","Exposure", 
                                      "Admin Boundaries", "mmr_polbnda2_adm1_250k_mimu")
 
-iFile$gauge_ENG <- file.path("inputs","Stations+ River Water Levels_ENG.xlsx")
-
+iFile$GIS$inp$SEADRIF_folder <- file.path(file.path("..","..","1-data","Hazard","SEADRIF"))
 
 
 
@@ -71,10 +70,15 @@ if(!require(scales)) {
 }
 
 
-  ## GIS ##
+## GIS ##
 if(!require(sf)) {
   install.packages("sf")
   library(sf)
+}
+
+if(!require(raster)) {
+  install.packages("raster")
+  library(raster)
 }
 
 if(!require(leaflet)) {
@@ -88,17 +92,18 @@ if(!require(leaflet.minicharts)) {
 }
 
 
+
 ## 2.0 DAMAGE DATA -----------------------------------------------------------
 ## 2.1 READ SPREADSHEETS ----
 damageData <- list()
 
 for (i in 1:length(sheetNames)){
   a <- data.table(read_excel(path = iFile$damageData, sheet = sheetNames[i], 
-                             range = "AD3:AI16", trim_ws = T))
+                             range = resultsRange, trim_ws = T))
   b <- na.omit(a)
   b[,sheet := sheetNames[i]]
   if ("row labels" %in% tolower(names(b))) names(b)[tolower(names(b))=="row labels"] <- "State"
-
+  
   damageData$daily[[sheetNames[i]]] <- b
 }
 rm(a,b)
@@ -107,29 +112,29 @@ damageData$comb <- rbindlist(damageData$daily, use.names = TRUE, fill = T)
 
 
 ## 2.2 TREAT THE DATA ----
-  ## Tidy Titles ##
+## Tidy Titles ##
 c <- names(damageData$comb)
 c <- str_remove_all(string = c, pattern = "Sum of ")
 c <- str_remove_all(string = c, pattern = " ")
 names(damageData$comb) <- c ; rm(c)
 
-  ## Add date ##
+## Add date ##
 d <- substr(x = damageData$comb$sheet, start = 1, nchar(damageData$comb$sheet)-2)
 damageData$comb$date <- as.Date(d, format = "%d-%m-%Y") ; rm(d)
 
-  ## Extract the 'Grand Totals' rows ##
+## Extract the 'Grand Totals' rows ##
 damageData$totals <- damageData$comb[State %like% "Grand Total"]
 damageData$comb <- damageData$comb[!State %like% "Grand Total"]
 
 
 
-  ## Prepare Long Table ##
+## Prepare Long Table ##
 damageData$gg$state <- melt(data = damageData$comb, id.vars = c("State", "sheet", "date"),
                             variable.name = "metric", value.name = "value")
 damageData$gg$totals <- melt(data = damageData$totals, id.vars = c("State", "sheet", "date"),
                              variable.name = "metric", value.name = "value")
 
-  ## Calculate Differences Over the Time Period ##
+## Calculate Differences Over the Time Period ##
 e <- damageData$gg$state[,.(min=min(value), max=max(value)), by=.(State, metric)]
 e[,diff:=max-min]
 damageData$diff <- e ; rm(e)
@@ -159,18 +164,18 @@ gaugeData$raw <- data.table(read_excel(path = iFile$gauge, sheet = 1))
 
 
 ## 3.2 ADD STATE NAME TO GAUGE POINTS ----
-  ## read in shapefiles ##
+## read in shapefiles ##
 GIS <- list()
 GIS$inp$adm1_mimu <- st_read(dsn=iFile$GIS$inp$adm1_mimu)
 
-  ## plot gauge locations ##
+## plot gauge locations ##
 GIS$m$gaugePoints <- leaflet(data = ) %>%
   addTiles() %>%
   addPolygons(data=GIS$inp$adm1_mimu) %>%
   addCircles(data = gaugeData$raw, lng = ~Lon, lat = ~Lat)
 GIS$m$gaugePoints
 
-  ## identify which stations in which admin 1 (spatial join on state) ##
+## identify which stations in which admin 1 (spatial join on state) ##
 b <- st_as_sf(x = gaugeData$raw, coords = c("Lon", "Lat"),  #convert data.table with lat-long to spatial object
               crs=st_crs(GIS$inp$adm1_mimu))                #obtain the CRS of the admin layer to set other layers as the same
 nrow(gaugeData$raw)
@@ -183,13 +188,14 @@ st_is(c, "POINT")
 nrow(c)
 View(c)
 gaugeData$shp <- c
-gaugeData$shp$Lat <- st_coordinates(gaugeData$shape)[,2]
-gaugeData$shp$Lon <- st_coordinates(gaugeData$shape)[,1]
+gaugeData$shp$Lat <- st_coordinates(gaugeData$shp)[,2]
+gaugeData$shp$Lon <- st_coordinates(gaugeData$shp)[,1]
 gaugeData$raw <- data.table(gaugeData$shp)
-View(d)
+
+rm(b,c)
 
 
-## 3.2 PLOT ----
+## 3.3 PLOT ----
 gaugeData$plots$all <- ggplot(data=gaugeData$raw) +
   geom_line(aes(x=Date1, y = `Distance to Danger Level (cm)`,
                 colour=Lat, group=factor(Sr))) +
@@ -207,18 +213,143 @@ gaugeData$plots$states
 
 ## 4.0 SENTINEL DATA ------------------------------------------------------------------------
 
+if(!require(rgdal)) {
+  install.packages("rgdal")
+  library(rgdal)
+}
+
+if(!require(tmap)) {
+  install.packages("tmap")
+  library(tmap)
+}
 
 
+SEADRIF <- list()
 
+#list raster files
+SEADRIF$fileList <- list.files(iFile$GIS$inp$SEADRIF_folder, pattern = "*.tif$")
+SEADRIF$fileTable <- data.table(n=1:length(SEADRIF$fileList),
+                                files=SEADRIF$fileList,
+                                date=as.Date(word(SEADRIF$fileList,2,sep="_")))
 
-## 4.0 MAP DATA --------------------------------------------------------------------------
-## 4.1 READ IN SHAPEFILES ----
-
-  ## read in shapefiles ##
+#read in admin3 boundaries
 GIS$inp$admn3_mimu <- st_read(dsn = iFile$GIS$inp$admn3_mimu$dsn, 
-                                 layer = iFile$GIS$inp$admn3_mimu$layer)
+                              layer = iFile$GIS$inp$admn3_mimu$layer)
 
-  ## plot flow with time ##
+
+countPixels <- function(tileList, polygon, subDivision="ST", subDivNames=unique(polygon[[subDivision]]),
+                        pixelToCount=3, outputFolder="outputs"){
+  for (iSubDiv in subDivNames) {
+    time_start <- Sys.time()
+    
+    if(is.null(intersect(extent(tileList$tile), extent(polygon[polygon[[subDivision]] == iSubDiv,])))) { #check if the raster overlaps with the state
+      tileList$pixelCounts[[iSubDiv]] <- 0
+    } else {
+      tileList$pixelCounts[[iSubDiv]] <-
+        sum(
+          getValues(
+            mask(x =                                                               
+                   crop( tileList$tile,
+                         extent(polygon[polygon[[subDivision]] == iSubDiv,])  # 1.reduce the raster extents to that of the state (to save time)
+                   ), mask = polygon[polygon[[subDivision]] == iSubDiv,])       # 2.mask the raster by the state boundary
+          )==pixelToCount,                                                                       # 3.count the pixels of the masked raster 
+          na.rm = T)
+    } #end else
+    
+    tileList$duration[[iSubDiv]] <- Sys.time()-time_start
+  } #end for iSubDiv
+  
+  save(tileList, file = file.path(outputFolder, paste0(tileList$name, ".r")))
+  
+  return(tileList)
+}
+
+
+SEADRIF$MyanmarAug2019$name <- "MyanmarAug2019"
+SEADRIF$MyanmarAug2019$tile <- raster(file.path(iFile$GIS$inp$SEADRIF_folder, "Aug2019", "MyanmarAug2019.tif"))
+SEADRIF$MyanmarAug2019 <- countPixels(tileList = SEADRIF$MyanmarAug2019, 
+                                      polygon = GIS$inp$admn3_mimu, subDivision = "TS_PCODE")
+
+
+
+for (i in (length(SEADRIF$fileList):1) ) {
+    #read the desired file
+  a <- SEADRIF$fileList[[i]]
+  b <- word(a, 2, sep = "_")  #date is in the filename
+  SEADRIF[[b]]$name <- as.Date(b) #name the tile after the date
+  SEADRIF[[b]]$tile <- raster(x = file.path(iFile$GIS$inp$SEADRIF_folder, SEADRIF$fileList[[i]])) #read in the tile
+  
+  SEADRIF[[b]] <- countPixels(tileList = SEADRIF[[b]], polygon = GIS$inp$admn3_mimu, subDivision = "TS_PCODE")
+} #end for i
+
+
+
+rm(a,b)
+
+
+
+
+## DEBUG/TEST-----------------------------
+##make smaller raster
+a <- SEADRIF$`2019-07-25`$tile
+b <- crop(x = a, extent(a)*0.1) #select the central 10% of a (to make the file smaller)
+plot(b)
+
+#count number of pixels with a value
+system.time(sum(getValues(b)==0))
+system.time(hist(b)) #takes longer. use the getvalue(x)==3 method
+
+
+
+#make small raster which crosses border
+c <- crop(a, extent(98.5, 98.9, 26.9, 27.1))
+plot(c)
+
+#mask
+d <- mask(x = c, mask = GIS$inp$admn3_mimu)
+e <- mask(x = c, mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
+system.time(mask(x = c, mask = GIS$inp$admn3_mimu))
+system.time(mask(x = c, mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",]))
+
+#system.time(mask(x = a, mask = GIS$inp$admn3_mimu)) #stopped at 10mins!
+
+#so the line is
+
+system.time(sum(getValues(
+  mask(x = a, mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
+)==2, na.rm = T))
+
+system.time(sum(getValues(
+  mask(x = crop(a, extent(GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])),
+       mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
+)==2, na.rm = T))
+
+
+
+
+
+
+extent(GIS$inp$admn3_mimu)
+extent(GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
+#stack
+#SEADRIF$stack <- 
+
+
+tm_shape(shp = e) +
+  tm_raster() +
+  tm_shape(shp = GIS$inp$admn3_mimu) + 
+  tm_borders() +
+  tm_shape(shp = GIS$inp$admn3_mimu) + 
+  tm_polygons("ST")
+
+
+
+## 5.0 MAP DATA --------------------------------------------------------------------------
+## 5.1 READ IN SHAPEFILES ----
+
+## read in shapefiles ##
+
+## plot flow with time ##
 GIS$m$flowTime <- leaflet() %>%
   addTiles() %>%
   addMinicharts(lng = gaugeData$raw$Lon, lat = gaugeData$raw$Lat, chartdata = gaugeData$raw$`WaterLevel cm`,
