@@ -17,6 +17,9 @@ iFile$gauge <- file.path("inputs","Stations+ River Water Levels.xlsx")
 sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed")
 resultsRange <- "AD3:AI18"
 
+iFile$`Myanmar PCodes` <- file.path("..","..","1-data","Exposure","Myanmar PCodes Release-VIII.i_Sep2017_Countrywide.xlsx")
+
+
 ## GIS ##
 iFile$GIS$inp$admn3_mimu$dsn <- file.path("..","..","1-data","Exposure", "Admin Boundaries")
 iFile$GIS$inp$admn3_mimu$layer <- "mmr_polbnda_adm3_250k_mimu"
@@ -95,6 +98,31 @@ if(!require(leaflet.minicharts)) {
 
 ## 2.0 DAMAGE DATA -----------------------------------------------------------
 ## 2.1 READ SPREADSHEETS ----
+
+Myanmar_PCodes <- list()
+Myanmar_PCodes$States <- data.table(read_excel(iFile$`Myanmar PCodes`, sheet = "_01_States"))
+Myanmar_PCodes$Townships <- data.table(read_excel(iFile$`Myanmar PCodes`, sheet = "_03_Townships"))
+
+tidy_DamDat <- function(damDat) {
+  ## Check State names ##
+  if ("row labels" %in% tolower(names(damDat))) names(damDat)[tolower(names(damDat))=="row labels"] <- "State"
+  damDat[State=="Karen", State:="Kayin"]
+  damDat[State=="Rakkhine", State:="Rakhine"]
+  damDat[State=="Tanintari", State:="Tanintharyi"]
+  
+  if(!any(damDat$State %in% Myanmar_PCodes$States$State_Region)) warning(paste0("States present in ", iFile$damageData, " which are not in ", iFile$`Myanmar PCodes`, "! Please check that state names have been spelled correctly."))
+  
+  ## Tidy Titles ##
+  c <- names(damDat)
+  c <- str_remove_all(string = c, pattern = "Sum of ")
+  c <- str_remove_all(string = c, pattern = " ")
+  names(damDat) <- c ; rm(c)
+  
+  return(damDat)
+} #check heading names and State names
+
+
+
 damageData <- list()
 
 for (i in 1:length(sheetNames)){
@@ -102,9 +130,8 @@ for (i in 1:length(sheetNames)){
                              range = resultsRange, trim_ws = T))
   b <- na.omit(a)
   b[,sheet := sheetNames[i]]
-  if ("row labels" %in% tolower(names(b))) names(b)[tolower(names(b))=="row labels"] <- "State"
-  
-  damageData$daily[[sheetNames[i]]] <- b
+
+  damageData$daily[[sheetNames[i]]] <- tidy_DamDat(b) #check heading names and State names
 }
 rm(a,b)
 
@@ -112,12 +139,6 @@ damageData$comb <- rbindlist(damageData$daily, use.names = TRUE, fill = T)
 
 
 ## 2.2 TREAT THE DATA ----
-## Tidy Titles ##
-c <- names(damageData$comb)
-c <- str_remove_all(string = c, pattern = "Sum of ")
-c <- str_remove_all(string = c, pattern = " ")
-names(damageData$comb) <- c ; rm(c)
-
 ## Add date ##
 d <- substr(x = damageData$comb$sheet, start = 1, nchar(damageData$comb$sheet)-2)
 damageData$comb$date <- as.Date(d, format = "%d-%m-%Y") ; rm(d)
@@ -210,6 +231,55 @@ gaugeData$plots$states <- gaugeData$plots$all +
 gaugeData$plots$states
 
 
+## 4.0 LOSSES ----------------------------------------------
+
+## Calc Factor 14th - 19th ##
+c <- merge(x = damageData$daily$`19-8-2019ed`, y = damageData$daily$`14-8-2019ed`, by="State", all.x=T, all.y=T) #Naypyidaw doesn't appear
+
+d <- c[,.(State,
+          Total_affected_houses = Total_affected_houses.x/Total_affected_houses.y,
+          Tot_household = Tot_household.x/Tot_household.y,
+          Tot_ppl = Tot_ppl.x/Tot_ppl.y,
+          Materials_for_house_school_kyat = Materials_for_house_school_kyat.x/Materials_for_house_school_kyat.y,
+          Total_kyat = Total_kyat.x/Total_kyat.y)]
+
+  #replace NAs, NANs, & INFs
+e <- !do.call(cbind, lapply(d, is.finite)) #https://stackoverflow.com/questions/12188509/cleaning-inf-values-from-an-r-dataframe
+d[e] <- 1
+d$State <- c$State
+
+damageData$stateFactors$`19_14` <- d
+rm(c,d,e)
+
+
+## Read 14th TS-level data ##
+a <- read_excel(iFile$damageData, sheet = "14-8-2019ed", range = "AR6:AY71")
+b <- tidy_DamDat(data.table(a)) #check heading names and State names
+
+
+## Estimate 19th TS-level data ##
+c <- merge(x = b, y = damageData$stateFactors$`19_14`, by="State", all.x=T, all.y=F) #Naypyidaw doesn't appear
+
+d <- c[,.(TS_Pcode, TS_Name = Corrent_Name,  
+          State,
+          Total_affected_houses = Total_affected_houses.x*Total_affected_houses.y,
+          Tot_household = Tot_household.x*Tot_household.y,
+          Tot_ppl = Tot_ppl.x*Tot_ppl.y,
+          Materials_for_house_school_kyat = Materials_for_house_school_kyat.x*Materials_for_house_school_kyat.y,
+          Total_kyat = Total_kyat.x*Total_kyat.y)]
+
+## Add Township name ##
+damageData$daily$`19-8-2019_township` <- merge(Myanmar_PCodes$Townships[,.(TS_Pcode, Township, District)], d, by="TS_Pcode")
+rm(a,b,c)
+
+
+a <- read_excel()
+
+## Read in MIMU_GAD ##
+
+
+## Calc Losses
+
 
 ## 4.0 SENTINEL DATA ------------------------------------------------------------------------
 
@@ -272,13 +342,15 @@ SEADRIF$MyanmarAug2019 <- countPixels(tileList = SEADRIF$MyanmarAug2019,
 
 
 
-for (i in (length(SEADRIF$fileList):1) ) {
+#for (i in (length(SEADRIF$fileList):1) ) {
+for (i in (71:1) ) {
     #read the desired file
   a <- SEADRIF$fileList[[i]]
   b <- word(a, 2, sep = "_")  #date is in the filename
   SEADRIF[[b]]$name <- as.Date(b) #name the tile after the date
   SEADRIF[[b]]$tile <- raster(x = file.path(iFile$GIS$inp$SEADRIF_folder, SEADRIF$fileList[[i]])) #read in the tile
   
+  # Count Flooded pixels per township
   SEADRIF[[b]] <- countPixels(tileList = SEADRIF[[b]], polygon = GIS$inp$admn3_mimu, subDivision = "TS_PCODE")
 } #end for i
 
