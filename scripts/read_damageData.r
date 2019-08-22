@@ -10,11 +10,46 @@
 UCC <- list()
 UCC$rural <- 100 #$USD/m^2. Tony: $57 in 2015 PDNA, increased to reflect GDP growth
 UCC$urban <- 300
+
 PPD <- 4.2 #Tony: 4.6 in 2014 census, reduced for population trends
+
 GDP <- list()
 GDP$`2017` <- 69.32e9 #$bn
-houseSize <- 50 #m^2. Tony: 2015 PDNA
-MDR <- 0.1
+
+houseSize <- list()
+houseSize$rural <- 45 #m^2. Tony: 2015 PDNA
+houseSize$urban <- 60
+
+MDR <- list()
+MDR$bldgs$general <- 0.1
+MDR$bldgs$manual$State <- c("Mon", "Mandalay")
+MDR$bldgs$manual$MDR <- 0.12
+
+MDR$agri <- 0.4
+
+
+Kachin
+Kayah
+Kayin
+Chin
+Sagaing
+Tanintharyi
+Bago (East)
+Bago (West)
+Magway
+Mandalay
+Mon
+Rakhine
+Yangon
+Shan (South)
+Shan (North)
+Shan (East)
+Ayeyarwady
+Nay Pyi Taw
+Bago
+Shan
+
+
 
 ## Input Files --
 iFile <- list()
@@ -409,12 +444,14 @@ a[,HH_DwellCensus_ratio := Tot_household/affectedDwellings_census] #tests whethe
 
 #affected (from census & UCC)
 #a[,affectedHousingStock_UCC := Tot_household * UCC * houseSize]
-a[,resiStock_UCC := (`Conventional HH Total Number (n)-` + (`Pop in Institutions`/`Mean household size`)) *
-    ((`Urban Population %-`*UCC$urban) + ((1-`Urban Population %-`) * UCC$rural)) *   #(%urban x UCC$urban) + (%rural x UCC$rural) x
-    houseSize]                                                                        #m^2]
+a[,resiStock_UCC := (`Conventional HH Total Number (n)-` + (`Pop in Institutions`/`Mean household size`)) *  #total households (conventional + institutions)
+    ((`Urban Population %-` * UCC$urban * houseSize$urban) +        #( (%urban x UCC$urban x houseSize$urban) +
+      ((1-`Urban Population %-`) * UCC$rural * houseSize$rural))]   #(%rural x ...) )
+
 a[,affectedResiStock_UCC := Tot_household *                                        #reported affected households x
-    ((`Urban Population %-`*UCC$urban) + ((1-`Urban Population %-`) * UCC$rural)) *   #(%urban x UCC$urban) + (%rural x UCC$rural) x
-    houseSize]                                                                        #m^2
+    ((`Urban Population %-` * UCC$urban * houseSize$urban) +        #( (%urban x UCC$urban) +
+       ((1-`Urban Population %-`) * UCC$rural * houseSize$rural))]   #(%urban x UCC$urban) + (%rural x UCC$rural) x
+
 a[,affectedGDP1 := affected_tot*`GDP Est 1 via State`]
 a[,affectedGDP2 := affected_tot*`GDP Est 2 via Region old stat`]
 
@@ -424,11 +461,14 @@ a[,affectedOtherCapstock := affected_tot*`Other Building Cap Stock`]
 a[,affectedAgriStock := affected_tot*`Agriculture Stock (for Calculation)`]
 
 #damages
-a[,damagesResiCapstock_UCC := affectedResiStock_UCC * MDR]
+a[,damagesResiCapstock_UCC := affectedResiStock_UCC * MDR$bldgs$general]
+a[State %in% MDR$bldgs$manual$State,
+  damagesResiCapstock_UCC := affectedResiStock_UCC * MDR$bldgs$manual$MDR]
 
-a[,damagesResiCapstock := affectedResiCapstock*MDR]
-a[,damagesOtherCapstock := affectedOtherCapstock*MDR]
-a[,damagesAgriStock := affectedAgriStock*MDR]
+
+a[,damagesResiCapstock := affectedResiCapstock*MDR$bldgs]
+a[,damagesOtherCapstock := affectedOtherCapstock*MDR$bldgs]
+a[,damagesAgriStock := affectedAgriStock*MDR$agri]
 
 
 ## Sums ##
@@ -452,7 +492,11 @@ fwrite(LossCalc$results, file = file.path("outputs", oFolder, "Damages_20Aug.csv
 write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_20Aug.csv"))
 save.image(file = file.path("outputs", oFolder, "allData.RData"))
 
+
 ## 4.4 PLOT DAMAGES ON MAP ----
+
+
+
 
 
 ## 4.0 SENTINEL DATA ------------------------------------------------------------------------
