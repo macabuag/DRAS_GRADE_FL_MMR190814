@@ -7,8 +7,12 @@
 
 ## 1.0 SETUP -----------------------------------------------------------
 ## User-Defined Values --
-UCC <- 65 #$USD/m^2. Tony: $57 in 2015 PDNA, increased to reflect GDP growth
+UCC <- list()
+UCC$rural <- 100 #$USD/m^2. Tony: $57 in 2015 PDNA, increased to reflect GDP growth
+UCC$urban <- 300
 PPD <- 4.2 #Tony: 4.6 in 2014 census, reduced for population trends
+GDP <- list()
+GDP$`2017` <- 69.32e9 #$bn
 houseSize <- 50 #m^2. Tony: 2015 PDNA
 MDR <- 0.1
 
@@ -41,6 +45,7 @@ iFile$GIS$inp$adm1_mimu <- file.path("..","..","1-data","Exposure",
 iFile$GIS$inp$SEADRIF_folder <- file.path(file.path("..","..","1-data","Hazard","SEADRIF"))
 
 
+oFolder <- paste0(gsub("[[:punct:]]", " ", Sys.time()), "-readDamDat")  #create a unique folder with the run date
 
 
 ## Packages --
@@ -64,10 +69,10 @@ if(!require(tidyr)) {
   library(tidyr)
 }
 
-# if(!require(dplyr)) {
-#   install.packages("dplyr")
-#   library(dplyr)
-# }
+if(!require(dplyr)) {
+  install.packages("dplyr")
+  library(dplyr)
+}
 
 if(!require(ggplot2)) {
   install.packages("ggplot2")
@@ -344,7 +349,7 @@ sum(TS_census$MIMU$cropped[,`Total Pop Both sexes- All`-
 sum(TS_census$MIMU$cropped[,`Pop Conventional HH Both sexes- All`-`Pop in Conventional households`], na.rm = T)
 sum(TS_census$MIMU$cropped[,`Pop in Institutions Both sexes- All`-`Pop in Institutions`], na.rm = T)
 sum(TS_census$MIMU$cropped[,`Mean household size`-`Population/Housing Units`], na.rm = T)
-sum(TS_census$MIMU$cropped[,(`Pop Urban Both sexes- All`/`Pop Rural Both sexes- All`)
+sum(TS_census$MIMU$cropped[,(`Pop Urban Both sexes- All`/(`Pop Urban Both sexes- All` + `Pop Rural Both sexes- All`))
                            -`Urban Population %-`], na.rm = T)
 
   ## READ BaselineData_Census SPREADSHEETS ----
@@ -394,39 +399,58 @@ if (TS_census$MIMU$sums["Conventional HH Total Number (n)-"] - sum(TS_census$bas
 ## COMBINE CENSUS WITH DAMAGE OBSERVATIONS --
 a <- merge(damageData$daily$latest_factored_TS, TS_census$MIMU$cropped,
            by.x="TS_Pcode", by.y="Township Pcode",
-           all.x=T, all.y=F)
+           all.x=T, all.y=T)
 a[,affected_tot_HH := Tot_household/`Conventional HH Total Number (n)-`] #ratio of reported affected HH / total HH (2014 census) per township
 a[,affected_tot := Tot_ppl/`Total Pop Both sexes- All`] #ratio of reported affected HH / total HH (2014 census) per township
 a[,affectedDwellings_PPD := Tot_ppl/PPD]
 a[,affectedDwellings_census := Tot_ppl/`Mean household size`]
 a[,HH_DwellPPD_ratio := Tot_household/affectedDwellings_PPD]
 a[,HH_DwellCensus_ratio := Tot_household/affectedDwellings_census] #tests whether the PPD implied by the damage data matches the PPD in the census
-a[,affectedHousingStock_UCC := Tot_household * UCC * houseSize]
+
+#affected (from census & UCC)
+#a[,affectedHousingStock_UCC := Tot_household * UCC * houseSize]
+a[,resiStock_UCC := (`Conventional HH Total Number (n)-` + (`Pop in Institutions`/`Mean household size`)) *
+    ((`Urban Population %-`*UCC$urban) + ((1-`Urban Population %-`) * UCC$rural)) *   #(%urban x UCC$urban) + (%rural x UCC$rural) x
+    houseSize]                                                                        #m^2]
+a[,affectedResiStock_UCC := Tot_household *                                        #reported affected households x
+    ((`Urban Population %-`*UCC$urban) + ((1-`Urban Population %-`) * UCC$rural)) *   #(%urban x UCC$urban) + (%rural x UCC$rural) x
+    houseSize]                                                                        #m^2
 a[,affectedGDP1 := affected_tot*`GDP Est 1 via State`]
 a[,affectedGDP2 := affected_tot*`GDP Est 2 via Region old stat`]
 
+#affected (from CATDAT)
 a[,affectedResiCapstock := affected_tot*`Residential Cap Stock`]
 a[,affectedOtherCapstock := affected_tot*`Other Building Cap Stock`]
 a[,affectedAgriStock := affected_tot*`Agriculture Stock (for Calculation)`]
 
+#damages
+a[,damagesResiCapstock_UCC := affectedResiStock_UCC * MDR]
 
-a[,damagesHousing := affectedHousingStock_UCC * MDR]
 a[,damagesResiCapstock := affectedResiCapstock*MDR]
 a[,damagesOtherCapstock := affectedOtherCapstock*MDR]
 a[,damagesAgriStock := affectedAgriStock*MDR]
 
-#a[,.(HH_DwellPPD_ratio,HH_DwellCensus_ratio)]
-#ToDo:
-#a[,affectedAgri := affected_tot*<AGRI COLUMN>]
-#a[,affectedAgri := affected_tot*<AGRI COLUMN>]
 
-colSums(a[,`Number of Village Tracts`:damagesBldgs], na.rm = T)
+## Sums ##
+b <- colSums(a[,select_if(a, is.numeric)], na.rm = T) #sum all the numeric columns
+
+b[["TotalHH_conv_instit"]] <- sum(a$`Conventional HH Total Number (n)-`) + 
+  sum(a$`Pop in Institutions`/mean(a$`Mean household size`))
+
+b[["resiStock_GDP"]] <- b[["Residential Cap Stock"]]/GDP$`2017` #capStock/GDP (CATDAT)
+b[["resiStock_UCC_GDP"]] <- b[["resiStock_UCC"]]/GDP$`2017`     #capStock/GDP (census & UCC)
+
+
 
 LossCalc <- list()
 LossCalc$results <- a
-rm(a)
+LossCalc$sums <- b
+rm(a,b)
 
-fwrite(LossCalc$results, file = file.path("outputs", "Damages_20Aug.csv"))
+dir.create(file.path("outputs",oFolder), showWarnings = F)
+fwrite(LossCalc$results, file = file.path("outputs", oFolder, "Damages_20Aug.csv"))
+write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_20Aug.csv"))
+save.image(file = file.path("outputs", oFolder, "allData.RData"))
 
 ## 4.4 PLOT DAMAGES ON MAP ----
 
