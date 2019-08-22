@@ -7,6 +7,10 @@
 
 ## 1.0 SETUP -----------------------------------------------------------
 ## User-Defined Values --
+UCC <- 65 #$USD/m^2. Tony: $57 in 2015 PDNA, increased to reflect GDP growth
+PPD <- 4.2 #Tony: 4.6 in 2014 census, reduced for population trends
+houseSize <- 50 #m^2. Tony: 2015 PDNA
+MDR <- 0.1
 
 ## Input Files --
 iFile <- list()
@@ -14,10 +18,17 @@ iFile <- list()
 iFile$damageData <- file.path("..","Spreadsheets","Damage Observations", "Damage Observations190819.xlsx")
 iFile$gauge <- file.path("inputs","Stations+ River Water Levels.xlsx")
 
-sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed")
+sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed", "20-8-2019ed")
 resultsRange <- "AD3:AI18"
+latestSheet <- sheetNames[length(sheetNames)] #change this if you want to consider a date other than the last specified in sheetNames
 
 iFile$`Myanmar PCodes` <- file.path("..","..","1-data","Exposure","Myanmar PCodes Release-VIII.i_Sep2017_Countrywide.xlsx")
+
+#iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calc.xlsx")
+#iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calcv3.xlsx")
+iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calcv3_x.xlsx")
+
+iFile$censusFolder <- file.path("..","..","1-data", "Exposure", "Census Data")
 
 
 ## GIS ##
@@ -28,6 +39,7 @@ iFile$GIS$inp$adm1_mimu <- file.path("..","..","1-data","Exposure",
                                      "Admin Boundaries", "mmr_polbnda2_adm1_250k_mimu")
 
 iFile$GIS$inp$SEADRIF_folder <- file.path(file.path("..","..","1-data","Hazard","SEADRIF"))
+
 
 
 
@@ -194,20 +206,20 @@ GIS$m$gaugePoints <- leaflet(data = ) %>%
   addTiles() %>%
   addPolygons(data=GIS$inp$adm1_mimu) %>%
   addCircles(data = gaugeData$raw, lng = ~Lon, lat = ~Lat)
-GIS$m$gaugePoints
+#GIS$m$gaugePoints
 
 ## identify which stations in which admin 1 (spatial join on state) ##
 b <- st_as_sf(x = gaugeData$raw, coords = c("Lon", "Lat"),  #convert data.table with lat-long to spatial object
               crs=st_crs(GIS$inp$adm1_mimu))                #obtain the CRS of the admin layer to set other layers as the same
 nrow(gaugeData$raw)
 nrow(b)
-st_is(b, "POINT")
-View(b)
+#st_is(b, "POINT")
+#View(b)
 
 c <- st_join(x = b, y = GIS$inp$adm1_mimu, left=TRUE)       #
 st_is(c, "POINT")
 nrow(c)
-View(c)
+#View(c)
 gaugeData$shp <- c
 gaugeData$shp$Lat <- st_coordinates(gaugeData$shp)[,2]
 gaugeData$shp$Lon <- st_coordinates(gaugeData$shp)[,1]
@@ -232,10 +244,12 @@ gaugeData$plots$states
 
 
 ## 4.0 LOSSES ----------------------------------------------
-
+## 4.1 FACTOR DAMAGE DATA ----
 ## Calc Factor 14th - 19th ##
-c <- merge(x = damageData$daily$`19-8-2019ed`, y = damageData$daily$`14-8-2019ed`, by="State", all.x=T, all.y=T) #Naypyidaw doesn't appear
+  #join state-level data from 14th & 19th
+c <- merge(x = damageData$daily[[latestSheet]], y = damageData$daily$`14-8-2019ed`, by="State", all.x=T, all.y=T) #Naypyidaw doesn't appear
 
+  #divide 19th / 14th to get factor
 d <- c[,.(State,
           Total_affected_houses = Total_affected_houses.x/Total_affected_houses.y,
           Tot_household = Tot_household.x/Tot_household.y,
@@ -253,13 +267,15 @@ rm(c,d,e)
 
 
 ## Read 14th TS-level data ##
-a <- read_excel(iFile$damageData, sheet = "14-8-2019ed", range = "AR6:AY71")
+a <- read_excel(iFile$damageData, sheet = "14-8-2019ed", range = "AR6:AY71") #65 affected townships (reported on 14th)
 b <- tidy_DamDat(data.table(a)) #check heading names and State names
 
 
 ## Estimate 19th TS-level data ##
+  #add the factors by state
 c <- merge(x = b, y = damageData$stateFactors$`19_14`, by="State", all.x=T, all.y=F) #Naypyidaw doesn't appear
 
+  #multiply TS-level observations by 
 d <- c[,.(TS_Pcode, TS_Name = Corrent_Name,  
           State,
           Total_affected_houses = Total_affected_houses.x*Total_affected_houses.y,
@@ -268,17 +284,151 @@ d <- c[,.(TS_Pcode, TS_Name = Corrent_Name,
           Materials_for_house_school_kyat = Materials_for_house_school_kyat.x*Materials_for_house_school_kyat.y,
           Total_kyat = Total_kyat.x*Total_kyat.y)]
 
+  #check that the sums add up
+e <- colSums(d[,`Total_affected_houses`:`Total_kyat`], na.rm = T)
+f <- colSums(damageData$daily[[latestSheet]][State!="Grand Total",`Total_affected_houses`:`Total_kyat`], na.rm = T)
+if (abs(sum(e-f))<1) {
+  cat(paste0("CHECK OK: factored TS-level totals and original state-level totals match."))
+} else {
+  warning("CHECK NG: factored TS-level totals and original state-level totals DO NOT match.\nCompare the following:")
+  print(damageData$daily[[latestSheet]][,State:Total_kyat])
+  print(d[,.(Total_affected_houses=sum(Total_affected_houses)), by=State])
+  #colSums(damageData$daily$`14-8-2019ed`[State!="Grand Total",`Total_affected_houses`:`Total_kyat`], na.rm = T)
+}
+
+
 ## Add Township name ##
-damageData$daily$`19-8-2019_township` <- merge(Myanmar_PCodes$Townships[,.(TS_Pcode, Township, District)], d, by="TS_Pcode")
-rm(a,b,c)
+damageData$daily$latest_factored_TS <- merge(Myanmar_PCodes$Townships[,.(TS_Pcode, Township, District)], d, by="TS_Pcode")
+damageData$daily$latest_factored_TS$date <- as.Date(substr(latestSheet, start = 1, stop = nchar(latestSheet)-2), 
+                                                    format = "%d-%m-%Y")
+rm(a,b,c,d,e,f)
 
 
-a <- read_excel()
+## 4.2 READ CENSUS DATA ----
+  ## Read in MIMU_GAD ##
+TS_census <- list()
+a <- read_excel(iFile$GAD_MIMU_Census_CatDat, sheet = "Join_MMR")
+if ("State/Region Pcode" %in% names(a)) {
+  TS_census$MIMU$raw <- a ; rm(a)
+} else {
+  TS_census$MIMU$raw <- read_excel(iFile$GAD_MIMU_Census_CatDat, sheet = "Join_MMR", skip = 1)
+}
 
-## Read in MIMU_GAD ##
+b <- data.table(TS_census$MIMU$raw)
+
+TS_census$MIMU$cropped <- cbind(b[,1:15],
+                                b[,.(`Total Pop Both sexes- All`,
+                                     `Pop Conventional HH Both sexes- All`,
+                                     `Pop in Institutions Both sexes- All`,
+                                     `Pop in Conventional households`,
+                                     `Pop in Institutions`,
+                                     `Pop Urban Both sexes- All`,
+                                     `Pop Rural Both sexes- All`,
+                                     `Urban Population %-`,
+                                     `Conventional HH Total Number (n)-`,
+                                     `% of Population in Institutions`,
+                                     `Mean household size`,
+                                     `Population/Housing Units`,
+                                     `Population Density- All`,
+                                     `Land Area Km2 - MIMU-`,
+                                     `Disasters Impacted by Nargis 2008`,
+                                     `Disasters Impacted by Giri 2010`,
+                                     `Disasters Impacted by Pakkoku Floods 2011`,
+                                     `Disasters Impacted by Seasonal Floods 2012`,
+                                     `Disasters Impacted by Seasonal Floods 2013`,
+                                     `Disasters Impacted by Floods 2015`)])
+
+  ## Check Column meanings ##
+sum(TS_census$MIMU$cropped[,`Total Pop Both sexes- All`-
+                         (`Pop Conventional HH Both sexes- All`+`Pop in Institutions Both sexes- All`)], na.rm = T)
+sum(TS_census$MIMU$cropped[,`Pop Conventional HH Both sexes- All`-`Pop in Conventional households`], na.rm = T)
+sum(TS_census$MIMU$cropped[,`Pop in Institutions Both sexes- All`-`Pop in Institutions`], na.rm = T)
+sum(TS_census$MIMU$cropped[,`Mean household size`-`Population/Housing Units`], na.rm = T)
+sum(TS_census$MIMU$cropped[,(`Pop Urban Both sexes- All`/`Pop Rural Both sexes- All`)
+                           -`Urban Population %-`], na.rm = T)
+
+  ## READ BaselineData_Census SPREADSHEETS ----
+iFile$censusList <- list.files(path = iFile$censusFolder, pattern = "*_Eng*")
+
+Census <- list()
+for(iCensus in iFile$censusList) {
+  # a <- data.table(read_excel(path = file.path(iFile$censusFolder, "BaselineData_Census_Ayeyarwady_with_Pcode_MIMU_05Jun2015_Eng.xlsx"),
+  #                 sheet = "Table I-1", skip = 3, n_max = 200))
+  iState <- word(string = iCensus, start = 3, sep = "_")
+  
+  if (iState %in% c("Union")) next #don't read Union (it isn't a state, but an amalgamated table of all states)
+  
+  a <- data.table(read_excel(path = file.path(iFile$censusFolder, iCensus),
+                             sheet = "Table I-1", skip = 3, n_max = 200))
+  
+  if (!"Township Pcode" %in% names(a)) {
+    a <- data.table(read_excel(path = file.path(iFile$censusFolder, iCensus),
+                               sheet = "Table I-1", skip = 4, n_max = 200))
+  } #sometimes the table starts from the 4th sometimes the 5th row
+  
+  b <- a[!is.na(`Township Pcode`)]
+  if (anyDuplicated(b$`Township Pcode`) != 0) warning("'Township Pcode not unique")
+  TS_census$baseline$state$Tab_I[[iState]] <- b
+  rm(a)
+}
+
+c <- rbindlist(TS_census$baseline$state$Tab_I, use.names = T, fill = T)
+if (anyDuplicated(c$`Township Pcode`) != 0) warning("'Township Pcode not unique")
+
+TS_census$baseline$Combined <- c
+rm(b,c)
+
+  ## COMPARE BASELINE_CENSUS & MIMU ----
+nrow(TS_census$baseline$Combined) ; length(unique(TS_census$baseline$Combined$`Township Pcode`))
+nrow(TS_census$MIMU$cropped) ; length(unique(TS_census$MIMU$cropped$`Township Pcode`))
+
+#check totals
+TS_census$MIMU$sums <- colSums(TS_census$MIMU$cropped[,`Number of Village Tracts`:`Population Density- All`], na.rm = T)
+if (TS_census$MIMU$sums["Conventional HH Total Number (n)-"] - sum(TS_census$baseline$Combined$Total) > 1) {
+  cat(paste0("CHECK OK: #households in '", iFile$GAD_MIMU_Census_CatDat, "' matches the sum of the total households in '", iFile$censusFolder, "'"))
+} else {
+  warning(paste0("CHECK NG! #households in '", iFile$GAD_MIMU_Census_CatDat, "' does NOT matches the sum of the total households in '", iFile$censusFolder, "'"))
+}
+
+## 4.3 CALC LOSSES ----
+## COMBINE CENSUS WITH DAMAGE OBSERVATIONS --
+a <- merge(damageData$daily$latest_factored_TS, TS_census$MIMU$cropped,
+           by.x="TS_Pcode", by.y="Township Pcode",
+           all.x=T, all.y=F)
+a[,affected_tot_HH := Tot_household/`Conventional HH Total Number (n)-`] #ratio of reported affected HH / total HH (2014 census) per township
+a[,affected_tot := Tot_ppl/`Total Pop Both sexes- All`] #ratio of reported affected HH / total HH (2014 census) per township
+a[,affectedDwellings_PPD := Tot_ppl/PPD]
+a[,affectedDwellings_census := Tot_ppl/`Mean household size`]
+a[,HH_DwellPPD_ratio := Tot_household/affectedDwellings_PPD]
+a[,HH_DwellCensus_ratio := Tot_household/affectedDwellings_census] #tests whether the PPD implied by the damage data matches the PPD in the census
+a[,affectedHousingStock_UCC := Tot_household * UCC * houseSize]
+a[,affectedGDP1 := affected_tot*`GDP Est 1 via State`]
+a[,affectedGDP2 := affected_tot*`GDP Est 2 via Region old stat`]
+
+a[,affectedResiCapstock := affected_tot*`Residential Cap Stock`]
+a[,affectedOtherCapstock := affected_tot*`Other Building Cap Stock`]
+a[,affectedAgriStock := affected_tot*`Agriculture Stock (for Calculation)`]
 
 
-## Calc Losses
+a[,damagesHousing := affectedHousingStock_UCC * MDR]
+a[,damagesResiCapstock := affectedResiCapstock*MDR]
+a[,damagesOtherCapstock := affectedOtherCapstock*MDR]
+a[,damagesAgriStock := affectedAgriStock*MDR]
+
+#a[,.(HH_DwellPPD_ratio,HH_DwellCensus_ratio)]
+#ToDo:
+#a[,affectedAgri := affected_tot*<AGRI COLUMN>]
+#a[,affectedAgri := affected_tot*<AGRI COLUMN>]
+
+colSums(a[,`Number of Village Tracts`:damagesBldgs], na.rm = T)
+
+LossCalc <- list()
+LossCalc$results <- a
+rm(a)
+
+fwrite(LossCalc$results, file = file.path("outputs", "Damages_20Aug.csv"))
+
+## 4.4 PLOT DAMAGES ON MAP ----
 
 
 ## 4.0 SENTINEL DATA ------------------------------------------------------------------------
