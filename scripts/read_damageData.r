@@ -28,36 +28,13 @@ MDR$bldgs$manual$MDR <- 0.12
 MDR$agri <- 0.4
 
 
-Kachin
-Kayah
-Kayin
-Chin
-Sagaing
-Tanintharyi
-Bago (East)
-Bago (West)
-Magway
-Mandalay
-Mon
-Rakhine
-Yangon
-Shan (South)
-Shan (North)
-Shan (East)
-Ayeyarwady
-Nay Pyi Taw
-Bago
-Shan
-
-
-
 ## Input Files --
 iFile <- list()
 
 iFile$damageData <- file.path("..","Spreadsheets","Damage Observations", "Damage Observations190819.xlsx")
 iFile$gauge <- file.path("inputs","Stations+ River Water Levels.xlsx")
 
-sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed", "20-8-2019ed")
+sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed", "20-8-2019ed", "21-08-2019ed")
 resultsRange <- "AD3:AI18"
 latestSheet <- sheetNames[length(sheetNames)] #change this if you want to consider a date other than the last specified in sheetNames
 
@@ -145,6 +122,12 @@ if(!require(leaflet.minicharts)) {
   install.packages("leaflet.minicharts")
   library(leaflet.minicharts)
 }
+
+if(!require(htmlwidgets)) {
+  install.packages("htmlwidgets")
+  library(htmlwidgets)
+}
+
 
 
 
@@ -338,7 +321,9 @@ if (abs(sum(e-f))<1) {
 
 
 ## Add Township name ##
-damageData$daily$latest_factored_TS <- merge(Myanmar_PCodes$Townships[,.(TS_Pcode, Township, District)], d, by="TS_Pcode")
+damageData$daily$latest_factored_TS <- merge(Myanmar_PCodes$Townships[,.(TS_Pcode, Township, District)], 
+                                             d,
+                                             by="TS_Pcode")
 damageData$daily$latest_factored_TS$date <- as.Date(substr(latestSheet, start = 1, stop = nchar(latestSheet)-2), 
                                                     format = "%d-%m-%Y")
 rm(a,b,c,d,e,f)
@@ -465,10 +450,17 @@ a[,damagesResiCapstock_UCC := affectedResiStock_UCC * MDR$bldgs$general]
 a[State %in% MDR$bldgs$manual$State,
   damagesResiCapstock_UCC := affectedResiStock_UCC * MDR$bldgs$manual$MDR]
 
+a[,damagesResiCapstock := affectedResiCapstock*MDR$bldgs$general]
+a[State %in% MDR$bldgs$manual$State,
+  damagesResiCapstock := affectedResiCapstock*MDR$bldgs$manual$MDR]
 
-a[,damagesResiCapstock := affectedResiCapstock*MDR$bldgs]
-a[,damagesOtherCapstock := affectedOtherCapstock*MDR$bldgs]
 a[,damagesAgriStock := affectedAgriStock*MDR$agri]
+
+a[,damagesOtherCapstock := affectedOtherCapstock*MDR$bldgs$general]
+a[State %in% MDR$bldgs$manual$State,
+  damagesOtherCapstock := affectedOtherCapstock*MDR$bldgs$manual$MDR]
+
+a[,damagesTotal := damagesResiCapstock_UCC + damagesAgriStock + damagesOtherCapstock]
 
 
 ## Sums ##
@@ -481,171 +473,84 @@ b[["resiStock_GDP"]] <- b[["Residential Cap Stock"]]/GDP$`2017` #capStock/GDP (C
 b[["resiStock_UCC_GDP"]] <- b[["resiStock_UCC"]]/GDP$`2017`     #capStock/GDP (census & UCC)
 
 
+c <- a[,.(resiStock_UCC = sum(resiStock_UCC, na.rm = T),
+          `Residential Cap Stock` = sum(`Residential Cap Stock`, na.rm = T),
+          reportedAffectedPpl = sum(Tot_ppl, na.rm = T),
+          reportedAffectedHH = sum(Tot_household, na.rm = T),
+          affectedResiCapstock = sum(affectedResiCapstock, na.rm = T),
+          affectedResiStock_UCC = sum(affectedResiStock_UCC, na.rm = T),
+          affectedGDP1 = sum(affectedGDP1, na.rm = T),
+          affectedGDP2 = sum(affectedGDP2, na.rm = T),
+          affectedAgriStock = sum(affectedAgriStock, na.rm = T),
+          affectedOtherCapstock = sum(affectedOtherCapstock, na.rm = T),
+          damagesResiCapstock_UCC = sum(damagesResiCapstock_UCC, na.rm = T),
+          damagesResiCapstock = sum(damagesResiCapstock, na.rm = T),
+          damagesAgriStock = sum(damagesAgriStock, na.rm = T),
+          damagesOtherCapstock = sum(damagesOtherCapstock, na.rm = T),
+          damagesTotal = sum(damagesTotal, na.rm = T)),
+       by=.(State=`State/Region Name`, ST_Pcode=`State/Region Pcode`)]
+
 
 LossCalc <- list()
-LossCalc$results <- a
+LossCalc$results$TS <- a
+LossCalc$results$ST <- c
 LossCalc$sums <- b
-rm(a,b)
-
-dir.create(file.path("outputs",oFolder), showWarnings = F)
-fwrite(LossCalc$results, file = file.path("outputs", oFolder, "Damages_20Aug.csv"))
-write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_20Aug.csv"))
-save.image(file = file.path("outputs", oFolder, "allData.RData"))
+rm(a,b,c)
 
 
 ## 4.4 PLOT DAMAGES ON MAP ----
 
-
-
-
-
-## 4.0 SENTINEL DATA ------------------------------------------------------------------------
-
-if(!require(rgdal)) {
-  install.packages("rgdal")
-  library(rgdal)
-}
-
-if(!require(tmap)) {
-  install.packages("tmap")
-  library(tmap)
-}
-
-
-SEADRIF <- list()
-
-#list raster files
-SEADRIF$fileList <- list.files(iFile$GIS$inp$SEADRIF_folder, pattern = "*.tif$")
-SEADRIF$fileTable <- data.table(n=1:length(SEADRIF$fileList),
-                                files=SEADRIF$fileList,
-                                date=as.Date(word(SEADRIF$fileList,2,sep="_")))
-
-#read in admin3 boundaries
-GIS$inp$admn3_mimu <- st_read(dsn = iFile$GIS$inp$admn3_mimu$dsn, 
-                              layer = iFile$GIS$inp$admn3_mimu$layer)
-
-
-countPixels <- function(tileList, polygon, subDivision="ST", subDivNames=unique(polygon[[subDivision]]),
-                        pixelToCount=3, outputFolder="outputs"){
-  for (iSubDiv in subDivNames) {
-    time_start <- Sys.time()
-    
-    if(is.null(intersect(extent(tileList$tile), extent(polygon[polygon[[subDivision]] == iSubDiv,])))) { #check if the raster overlaps with the state
-      tileList$pixelCounts[[iSubDiv]] <- 0
-    } else {
-      tileList$pixelCounts[[iSubDiv]] <-
-        sum(
-          getValues(
-            mask(x =                                                               
-                   crop( tileList$tile,
-                         extent(polygon[polygon[[subDivision]] == iSubDiv,])  # 1.reduce the raster extents to that of the state (to save time)
-                   ), mask = polygon[polygon[[subDivision]] == iSubDiv,])       # 2.mask the raster by the state boundary
-          )==pixelToCount,                                                                       # 3.count the pixels of the masked raster 
-          na.rm = T)
-    } #end else
-    
-    tileList$duration[[iSubDiv]] <- Sys.time()-time_start
-  } #end for iSubDiv
-  
-  save(tileList, file = file.path(outputFolder, paste0(tileList$name, ".r")))
-  
-  return(tileList)
-}
-
-
-SEADRIF$MyanmarAug2019$name <- "MyanmarAug2019"
-SEADRIF$MyanmarAug2019$tile <- raster(file.path(iFile$GIS$inp$SEADRIF_folder, "Aug2019", "MyanmarAug2019.tif"))
-SEADRIF$MyanmarAug2019 <- countPixels(tileList = SEADRIF$MyanmarAug2019, 
-                                      polygon = GIS$inp$admn3_mimu, subDivision = "TS_PCODE")
-
-
-
-#for (i in (length(SEADRIF$fileList):1) ) {
-for (i in (71:1) ) {
-    #read the desired file
-  a <- SEADRIF$fileList[[i]]
-  b <- word(a, 2, sep = "_")  #date is in the filename
-  SEADRIF[[b]]$name <- as.Date(b) #name the tile after the date
-  SEADRIF[[b]]$tile <- raster(x = file.path(iFile$GIS$inp$SEADRIF_folder, SEADRIF$fileList[[i]])) #read in the tile
-  
-  # Count Flooded pixels per township
-  SEADRIF[[b]] <- countPixels(tileList = SEADRIF[[b]], polygon = GIS$inp$admn3_mimu, subDivision = "TS_PCODE")
-} #end for i
-
-
-
-rm(a,b)
-
-
-
-
-## DEBUG/TEST-----------------------------
-##make smaller raster
-a <- SEADRIF$`2019-07-25`$tile
-b <- crop(x = a, extent(a)*0.1) #select the central 10% of a (to make the file smaller)
-plot(b)
-
-#count number of pixels with a value
-system.time(sum(getValues(b)==0))
-system.time(hist(b)) #takes longer. use the getvalue(x)==3 method
-
-
-
-#make small raster which crosses border
-c <- crop(a, extent(98.5, 98.9, 26.9, 27.1))
-plot(c)
-
-#mask
-d <- mask(x = c, mask = GIS$inp$admn3_mimu)
-e <- mask(x = c, mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
-system.time(mask(x = c, mask = GIS$inp$admn3_mimu))
-system.time(mask(x = c, mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",]))
-
-#system.time(mask(x = a, mask = GIS$inp$admn3_mimu)) #stopped at 10mins!
-
-#so the line is
-
-system.time(sum(getValues(
-  mask(x = a, mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
-)==2, na.rm = T))
-
-system.time(sum(getValues(
-  mask(x = crop(a, extent(GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])),
-       mask = GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
-)==2, na.rm = T))
-
-
-
-
-
-
-extent(GIS$inp$admn3_mimu)
-extent(GIS$inp$admn3_mimu[GIS$inp$admn3_mimu$ST == "Kachin",])
-#stack
-#SEADRIF$stack <- 
-
-
-tm_shape(shp = e) +
-  tm_raster() +
-  tm_shape(shp = GIS$inp$admn3_mimu) + 
-  tm_borders() +
-  tm_shape(shp = GIS$inp$admn3_mimu) + 
-  tm_polygons("ST")
-
-
-
-## 5.0 MAP DATA --------------------------------------------------------------------------
-## 5.1 READ IN SHAPEFILES ----
-
-## read in shapefiles ##
-
 ## plot flow with time ##
+GIS <- list()
 GIS$m$flowTime <- leaflet() %>%
   addTiles() %>%
   addMinicharts(lng = gaugeData$raw$Lon, lat = gaugeData$raw$Lat, chartdata = gaugeData$raw$`WaterLevel cm`,
                 showLabels = T, time = gaugeData$raw$Date1)
-GIS$m$flowTime
+#GIS$m$flowTime
 
 
+a <- read_sf(dsn = iFile$GIS$inp$admn3_mimu$dsn, 
+             layer = iFile$GIS$inp$admn3_mimu$layer)
+b <- merge(a, LossCalc$results$TS, by.x="TS_PCODE", by.y="TS_Pcode")
+c <- merge(b,LossCalc$results$ST, by.x="ST_PCODE", by.y="ST_Pcode")
 
 
+myPalette <- list()
+myPalette$damages <- colorNumeric( palette = "YlOrBr", domain = c$damagesResiCapstock_UCC.x, na.color = "transparent")
+
+
+myLab <- list()
+myLab$hov$TS <- paste("<b>TownShip</b>: ", c$T_NAME_M3, " (",c$TS, ")<br/>",
+                      "<b>State</b>: ", c$ST, "<br/>",
+                      "<b>Affected People (DDM)</b>: ", as.integer(c$Tot_ppl), "<br/><br/>",
+                      "<b>% Households Affected (2014 census)</b>: ", round(c$affected_tot_HH*100,0), "%<br/><br/>",
+                      "<b><u>State</u> Damages</b> (USD): (", c$ST, ")<br/>",
+                      "<i>Residential Buildings</i>: $", round(c$damagesResiCapstock_UCC.y/1e6,1), "m<br/>",
+                      "<i>Agriculture</i>: $", round(c$damagesAgriStock.y/1e6,1), "m<br/>",
+                      "<i>Other Sectors</i>: $", round(c$damagesOtherCapstock.y/1e6,1), "m<br/>",
+                      sep="") %>%
+  lapply(htmltools::HTML)
+
+
+GIS$m$damages <- leaflet(data = c) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(layerId = ~TS_PCODE,
+              color = ~myPalette$damages(damagesResiCapstock_UCC.x), fillOpacity = 0.8,
+              stroke = F,
+              label = myLab$hov$TS) %>%
+  addLegend(pal = myPalette$damages,
+            values = ~damagesResiCapstock_UCC.x,
+            title = "Damages",
+            position = "bottomleft",
+            opacity = 0.9)
+GIS$m$damages
+
+
+## 6.0 SAVE OUTPUTS ---------------------------------------------------
+dir.create(file.path("outputs",oFolder), showWarnings = F)
+fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_21Aug_township.csv"))
+fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_21Aug_state.csv"))
+write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_21Aug.csv"))
+save.image(file = file.path("outputs", oFolder, "allData.RData"))
+
+#saveWidget(GIS$m$damages, file = file.path("outputs", oFolder, "leafletMap.html"))
