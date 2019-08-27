@@ -8,8 +8,8 @@
 ## 1.0 SETUP -----------------------------------------------------------
 ## User-Defined Values --
 UCC <- list()
-UCC$rural <- 100 #$USD/m^2. Tony: $57 in 2015 PDNA, increased to reflect GDP growth
-UCC$urban <- 300
+UCC$rural <- 75 #$USD/m^2. Tony: $57 in 2015 PDNA, increased to reflect GDP growth
+UCC$urban <- 270
 
 PPD <- 4.2 #Tony: 4.6 in 2014 census, reduced for population trends
 
@@ -21,11 +21,19 @@ houseSize$rural <- 45 #m^2. Tony: 2015 PDNA
 houseSize$urban <- 60
 
 MDR <- list()
-MDR$bldgs$general <- 0.1
+MDR$bldgs$general <- 0.08
 MDR$bldgs$manual$State <- c("Mon", "Mandalay")
-MDR$bldgs$manual$MDR <- 0.12
+MDR$bldgs$manual$MDR <- 0.14
 
 MDR$agri <- 0.4
+
+MDR$other$general <- 0.07
+MDR$other$manual$MDR <- 0.11
+
+
+MDR$stilts$rural <- 0 #% rural buildings unaffected because on stilts
+MDR$stilts$urban <- 0
+
 
 
 ## Input Files --
@@ -34,9 +42,17 @@ iFile <- list()
 iFile$damageData <- file.path("..","Spreadsheets","Damage Observations", "Damage Observations190819.xlsx")
 iFile$gauge <- file.path("inputs","Stations+ River Water Levels.xlsx")
 
-sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", "19-8-2019ed", "20-8-2019ed", "21-08-2019ed")
-resultsRange <- "AD3:AI18"
-latestSheet <- sheetNames[length(sheetNames)] #change this if you want to consider a date other than the last specified in sheetNames
+sheetNames <- c("10-8-2019ed", "12-8-2019ed", "14-8-2019ed", "16-8-2019ed", 
+                "19-8-2019ed", "20-8-2019ed", "21-08-2019ed", "22-8-2019ed", "23-8-2019ed")
+
+resultsRange <- list()
+resultsRange$ST <- "AD3:AI18"
+#resultsRange$TS <- "AR6:AY71"
+resultsRange$TS <- "BH1:BO65"
+
+latestSheet <- list()
+latestSheet$ST <- sheetNames[length(sheetNames)] #change this if you want to consider a date other than the last specified in sheetNames
+latestSheet$TS <- "14-8-2019ed"
 
 iFile$`Myanmar PCodes` <- file.path("..","..","1-data","Exposure","Myanmar PCodes Release-VIII.i_Sep2017_Countrywide.xlsx")
 
@@ -144,6 +160,7 @@ tidy_DamDat <- function(damDat) {
   damDat[State=="Karen", State:="Kayin"]
   damDat[State=="Rakkhine", State:="Rakhine"]
   damDat[State=="Tanintari", State:="Tanintharyi"]
+  damDat[State=="Ayeyarwaddy", State:="Ayeyarwady"]
   
   if(!any(damDat$State %in% Myanmar_PCodes$States$State_Region)) warning(paste0("States present in ", iFile$damageData, " which are not in ", iFile$`Myanmar PCodes`, "! Please check that state names have been spelled correctly."))
   
@@ -162,7 +179,7 @@ damageData <- list()
 
 for (i in 1:length(sheetNames)){
   a <- data.table(read_excel(path = iFile$damageData, sheet = sheetNames[i], 
-                             range = resultsRange, trim_ws = T))
+                             range = resultsRange$ST, trim_ws = T))
   b <- na.omit(a)
   b[,sheet := sheetNames[i]]
 
@@ -270,7 +287,7 @@ gaugeData$plots$states
 ## 4.1 FACTOR DAMAGE DATA ----
 ## Calc Factor 14th - 19th ##
   #join state-level data from 14th & 19th
-c <- merge(x = damageData$daily[[latestSheet]], y = damageData$daily$`14-8-2019ed`, by="State", all.x=T, all.y=T) #Naypyidaw doesn't appear
+c <- merge(x = damageData$daily[[latestSheet$ST]], y = damageData$daily[[latestSheet$TS]], by="State", all.x=T, all.y=T) #Naypyidaw doesn't appear
 
   #divide 19th / 14th to get factor
 d <- c[,.(State,
@@ -290,7 +307,7 @@ rm(c,d,e)
 
 
 ## Read 14th TS-level data ##
-a <- read_excel(iFile$damageData, sheet = "14-8-2019ed", range = "AR6:AY71") #65 affected townships (reported on 14th)
+a <- read_excel(iFile$damageData, sheet = latestSheet$TS, range = resultsRange$TS) #65 affected townships (reported on 14th)
 b <- tidy_DamDat(data.table(a)) #check heading names and State names
 
 
@@ -307,26 +324,35 @@ d <- c[,.(TS_Pcode, TS_Name = Corrent_Name,
           Materials_for_house_school_kyat = Materials_for_house_school_kyat.x*Materials_for_house_school_kyat.y,
           Total_kyat = Total_kyat.x*Total_kyat.y)]
 
+  ##Add Nay Pyi Taw township##
+x <- cbind(data.table(TS_Pcode="MMR018007", 
+                        TS_Name="Lewe"),damageData$daily$`21-08-2019ed`[State %like% "Naypyidaw"])
+x$sheet <- NULL
+#y <- rbindlist(d,x, use.names = T, fill = T)
+y <- rbind(d,x)
+
+
   #check that the sums add up
-e <- colSums(d[,`Total_affected_houses`:`Total_kyat`], na.rm = T)
-f <- colSums(damageData$daily[[latestSheet]][State!="Grand Total",`Total_affected_houses`:`Total_kyat`], na.rm = T)
+e <- colSums(y[,`Total_affected_houses`:`Total_kyat`], na.rm = T)
+f <- colSums(damageData$daily[[latestSheet$ST]][State!="Grand Total",`Total_affected_houses`:`Total_kyat`], na.rm = T)
 if (abs(sum(e-f))<1) {
   cat(paste0("CHECK OK: factored TS-level totals and original state-level totals match."))
 } else {
   warning("CHECK NG: factored TS-level totals and original state-level totals DO NOT match.\nCompare the following:")
-  print(damageData$daily[[latestSheet]][,State:Total_kyat])
-  print(d[,.(Total_affected_houses=sum(Total_affected_houses)), by=State])
+  print(damageData$daily[[latestSheet$ST]][,State:Total_kyat])
+  print(y[,.(Total_affected_houses=sum(Total_affected_houses),
+             Tot_ppl=sum(Tot_ppl)), by=State])
   #colSums(damageData$daily$`14-8-2019ed`[State!="Grand Total",`Total_affected_houses`:`Total_kyat`], na.rm = T)
 }
 
 
 ## Add Township name ##
 damageData$daily$latest_factored_TS <- merge(Myanmar_PCodes$Townships[,.(TS_Pcode, Township, District)], 
-                                             d,
+                                             y,
                                              by="TS_Pcode")
-damageData$daily$latest_factored_TS$date <- as.Date(substr(latestSheet, start = 1, stop = nchar(latestSheet)-2), 
+damageData$daily$latest_factored_TS$date <- as.Date(substr(latestSheet$ST, start = 1, stop = nchar(latestSheet$ST)-2), 
                                                     format = "%d-%m-%Y")
-rm(a,b,c,d,e,f)
+rm(a,b,c,d,e,f, x,y)
 
 
 ## 4.2 READ CENSUS DATA ----
@@ -434,15 +460,15 @@ a[,resiStock_UCC := (`Conventional HH Total Number (n)-` + (`Pop in Institutions
       ((1-`Urban Population %-`) * UCC$rural * houseSize$rural))]   #(%rural x ...) )
 
 a[,affectedResiStock_UCC := Tot_household *                                        #reported affected households x
-    ((`Urban Population %-` * UCC$urban * houseSize$urban) +        #( (%urban x UCC$urban) +
-       ((1-`Urban Population %-`) * UCC$rural * houseSize$rural))]   #(%urban x UCC$urban) + (%rural x UCC$rural) x
+    ((`Urban Population %-` * UCC$urban * houseSize$urban*(1-MDR$stilts$urban)) +        #( (%urban x UCC$urban) +
+       ((1-`Urban Population %-`) * UCC$rural * houseSize$rural*(1-MDR$stilts$rural)))]   #(%urban x UCC$urban) + (%rural x UCC$rural) x
 
 a[,affectedGDP1 := affected_tot*`GDP Est 1 via State`]
 a[,affectedGDP2 := affected_tot*`GDP Est 2 via Region old stat`]
 
 #affected (from CATDAT)
 a[,affectedResiCapstock := affected_tot*`Residential Cap Stock`]
-a[,affectedOtherCapstock := affected_tot*`Other Building Cap Stock`]
+a[,affectedOtherCapstock := affected_tot*`Other Capital Stock (Non-Bldg and Infra)`]
 a[,affectedAgriStock := affected_tot*`Agriculture Stock (for Calculation)`]
 
 #damages
@@ -454,13 +480,16 @@ a[,damagesResiCapstock := affectedResiCapstock*MDR$bldgs$general]
 a[State %in% MDR$bldgs$manual$State,
   damagesResiCapstock := affectedResiCapstock*MDR$bldgs$manual$MDR]
 
+a[,damagesResi_mean := (damagesResiCapstock_UCC + damagesResiCapstock)/2]
+
+
 a[,damagesAgriStock := affectedAgriStock*MDR$agri]
 
-a[,damagesOtherCapstock := affectedOtherCapstock*MDR$bldgs$general]
+a[,damagesOtherCapstock := affectedOtherCapstock*MDR$other$general]
 a[State %in% MDR$bldgs$manual$State,
-  damagesOtherCapstock := affectedOtherCapstock*MDR$bldgs$manual$MDR]
+  damagesOtherCapstock := affectedOtherCapstock*MDR$other$manual$MDR]
 
-a[,damagesTotal := damagesResiCapstock_UCC + damagesAgriStock + damagesOtherCapstock]
+a[,damagesTotal := damagesResi_mean + damagesAgriStock + damagesOtherCapstock]
 
 
 ## Sums ##
@@ -485,6 +514,7 @@ c <- a[,.(resiStock_UCC = sum(resiStock_UCC, na.rm = T),
           affectedOtherCapstock = sum(affectedOtherCapstock, na.rm = T),
           damagesResiCapstock_UCC = sum(damagesResiCapstock_UCC, na.rm = T),
           damagesResiCapstock = sum(damagesResiCapstock, na.rm = T),
+          damagesResi_mean = sum(damagesResi_mean, na.rm = T),
           damagesAgriStock = sum(damagesAgriStock, na.rm = T),
           damagesOtherCapstock = sum(damagesOtherCapstock, na.rm = T),
           damagesTotal = sum(damagesTotal, na.rm = T)),
@@ -497,6 +527,11 @@ LossCalc$results$ST <- c
 LossCalc$sums <- b
 rm(a,b,c)
 
+
+
+## CHECK SUMS ##
+#write.csv(damageData$totals[sheet==latestSheet$ST], file = "damageData_totals.csv")
+#rbindlist(data.table(a), data.table(b), use.names = T, fill = F)
 
 ## 4.4 PLOT DAMAGES ON MAP ----
 
@@ -516,14 +551,14 @@ c <- merge(b,LossCalc$results$ST, by.x="ST_PCODE", by.y="ST_Pcode")
 
 
 myPalette <- list()
-myPalette$damages <- colorNumeric( palette = "YlOrBr", domain = c$damagesResiCapstock_UCC.x, na.color = "transparent")
+myPalette$damages <- colorNumeric( palette = "YlOrBr", domain = c$damagesTotal.x, na.color = "transparent")
 
 
 myLab <- list()
 myLab$hov$TS <- paste("<b>TownShip</b>: ", c$T_NAME_M3, " (",c$TS, ")<br/>",
                       "<b>State</b>: ", c$ST, "<br/>",
-                      "<b>Affected People (DDM)</b>: ", as.integer(c$Tot_ppl), "<br/><br/>",
-                      "<b>% Households Affected (2014 census)</b>: ", round(c$affected_tot_HH*100,0), "%<br/><br/>",
+                      "<b>Affected People (DDM)</b>: ", as.integer(c$Tot_ppl), "<br/>",
+                      "<b>% Pop. Affected</b>: ", round(c$affected_tot*100,0), "%<br/><br/>",
                       "<b><u>State</u> Damages</b> (USD): (", c$ST, ")<br/>",
                       "<i>Residential Buildings</i>: $", round(c$damagesResiCapstock_UCC.y/1e6,1), "m<br/>",
                       "<i>Agriculture</i>: $", round(c$damagesAgriStock.y/1e6,1), "m<br/>",
@@ -531,26 +566,30 @@ myLab$hov$TS <- paste("<b>TownShip</b>: ", c$T_NAME_M3, " (",c$TS, ")<br/>",
                       sep="") %>%
   lapply(htmltools::HTML)
 
+myOptions <- highlightOptions(color="black", weight = 2, bringToFront = T, stroke = T, opacity = 1)
+
 
 GIS$m$damages <- leaflet(data = c) %>%
   addProviderTiles(providers$CartoDB.Positron) %>%
   addPolygons(layerId = ~TS_PCODE,
-              color = ~myPalette$damages(damagesResiCapstock_UCC.x), fillOpacity = 0.8,
+              color = ~myPalette$damages(damagesTotal.x), fillOpacity = 0.8,
               stroke = F,
-              label = myLab$hov$TS) %>%
+              label = myLab$hov$TS,
+              highlight=myOptions) %>%
   addLegend(pal = myPalette$damages,
-            values = ~damagesResiCapstock_UCC.x,
-            title = "Damages",
+            values = ~damagesTotal.x,
+            title = "Township Damages",
             position = "bottomleft",
             opacity = 0.9)
 GIS$m$damages
 
+rm(a,b,c)
 
 ## 6.0 SAVE OUTPUTS ---------------------------------------------------
 dir.create(file.path("outputs",oFolder), showWarnings = F)
-fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_21Aug_township.csv"))
-fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_21Aug_state.csv"))
-write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_21Aug.csv"))
+fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_22Aug_township.csv"))
+fwrite(LossCalc$results$ST, file = file.path("outputs", oFolder, "Damages_22Aug_state.csv"))
+write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_22Aug.csv"))
 save.image(file = file.path("outputs", oFolder, "allData.RData"))
 
 #saveWidget(GIS$m$damages, file = file.path("outputs", oFolder, "leafletMap.html"))
