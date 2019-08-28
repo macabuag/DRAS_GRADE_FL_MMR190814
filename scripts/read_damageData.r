@@ -16,6 +16,8 @@ PPD <- 4.2 #Tony: 4.6 in 2014 census, reduced for population trends
 GDP <- list()
 GDP$`2017` <- 69.32e9 #$bn
 
+popCorrection <- 54.29/51.48
+
 houseSize <- list()
 houseSize$rural <- 45 #m^2. Tony: 2015 PDNA
 houseSize$urban <- 60
@@ -58,7 +60,8 @@ iFile$`Myanmar PCodes` <- file.path("..","..","1-data","Exposure","Myanmar PCode
 
 #iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calc.xlsx")
 #iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calcv3.xlsx")
-iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calcv3_x.xlsx")
+#iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calcv3_x.xlsx")
+iFile$GAD_MIMU_Census_CatDat <- file.path("..","Spreadsheets", "Township Exp Loss Data", "GAD_MIMU_Census_CATDAT_townshipData_calcv4_x.xlsx")
 
 iFile$censusFolder <- file.path("..","..","1-data", "Exposure", "Census Data")
 
@@ -66,6 +69,9 @@ iFile$censusFolder <- file.path("..","..","1-data", "Exposure", "Census Data")
 ## GIS ##
 iFile$GIS$inp$admn3_mimu$dsn <- file.path("..","..","1-data","Exposure", "Admin Boundaries")
 iFile$GIS$inp$admn3_mimu$layer <- "mmr_polbnda_adm3_250k_mimu"
+
+iFile$GIS$inp$adm2_mimu <- file.path("..","..","1-data","Exposure", 
+                                     "Admin Boundaries", "mmr_polbnda_adm2_250k_mimu")
 
 iFile$GIS$inp$adm1_mimu <- file.path("..","..","1-data","Exposure", 
                                      "Admin Boundaries", "mmr_polbnda2_adm1_250k_mimu")
@@ -447,7 +453,7 @@ a <- merge(damageData$daily$latest_factored_TS, TS_census$MIMU$cropped,
            by.x="TS_Pcode", by.y="Township Pcode",
            all.x=T, all.y=T)
 a[,affected_tot_HH := Tot_household/`Conventional HH Total Number (n)-`] #ratio of reported affected HH / total HH (2014 census) per township
-a[,affected_tot := Tot_ppl/`Total Pop Both sexes- All`] #ratio of reported affected HH / total HH (2014 census) per township
+a[,affected_tot := Tot_ppl/(`Total Pop Both sexes- All`*popCorrection)] #ratio of reported affected HH / total HH (2014 census) per township
 a[,affectedDwellings_PPD := Tot_ppl/PPD]
 a[,affectedDwellings_census := Tot_ppl/`Mean household size`]
 a[,HH_DwellPPD_ratio := Tot_household/affectedDwellings_PPD]
@@ -501,9 +507,10 @@ b[["TotalHH_conv_instit"]] <- sum(a$`Conventional HH Total Number (n)-`) +
 b[["resiStock_GDP"]] <- b[["Residential Cap Stock"]]/GDP$`2017` #capStock/GDP (CATDAT)
 b[["resiStock_UCC_GDP"]] <- b[["resiStock_UCC"]]/GDP$`2017`     #capStock/GDP (census & UCC)
 
-
+  ## state aggregation ###
 c <- a[,.(resiStock_UCC = sum(resiStock_UCC, na.rm = T),
           `Residential Cap Stock` = sum(`Residential Cap Stock`, na.rm = T),
+          totalPop_2014 = sum(`Total Pop Both sexes- All`, na.rm=T),
           reportedAffectedPpl = sum(Tot_ppl, na.rm = T),
           reportedAffectedHH = sum(Tot_household, na.rm = T),
           affectedResiCapstock = sum(affectedResiCapstock, na.rm = T),
@@ -520,18 +527,59 @@ c <- a[,.(resiStock_UCC = sum(resiStock_UCC, na.rm = T),
           damagesTotal = sum(damagesTotal, na.rm = T)),
        by=.(State=`State/Region Name`, ST_Pcode=`State/Region Pcode`)]
 
+c[, affected_tot := reportedAffectedPpl/(totalPop_2014*popCorrection)]
+
+## District aggregation ###
+d <- a[,.(resiStock_UCC = sum(resiStock_UCC, na.rm = T),
+          `Residential Cap Stock` = sum(`Residential Cap Stock`, na.rm = T),
+          totalPop_2014 = sum(`Total Pop Both sexes- All`, na.rm=T),
+          reportedAffectedPpl = sum(Tot_ppl, na.rm = T),
+          reportedAffectedHH = sum(Tot_household, na.rm = T),
+          affectedResiCapstock = sum(affectedResiCapstock, na.rm = T),
+          affectedResiStock_UCC = sum(affectedResiStock_UCC, na.rm = T),
+          affectedGDP1 = sum(affectedGDP1, na.rm = T),
+          affectedGDP2 = sum(affectedGDP2, na.rm = T),
+          affectedAgriStock = sum(affectedAgriStock, na.rm = T),
+          affectedOtherCapstock = sum(affectedOtherCapstock, na.rm = T),
+          damagesResiCapstock_UCC = sum(damagesResiCapstock_UCC, na.rm = T),
+          damagesResiCapstock = sum(damagesResiCapstock, na.rm = T),
+          damagesResi_mean = sum(damagesResi_mean, na.rm = T),
+          damagesAgriStock = sum(damagesAgriStock, na.rm = T),
+          damagesOtherCapstock = sum(damagesOtherCapstock, na.rm = T),
+          damagesTotal = sum(damagesTotal, na.rm = T)),
+       by=.(District=`District Name`, DT_PCODE=`District Pcode`)]
+
+d[, affected_tot := reportedAffectedPpl/(totalPop_2014*popCorrection)]
+
 
 LossCalc <- list()
 LossCalc$results$TS <- a
 LossCalc$results$ST <- c
+LossCalc$results$DT <- d
 LossCalc$sums <- b
-rm(a,b,c)
+rm(a,b,c,d)
 
 
 
 ## CHECK SUMS ##
 #write.csv(damageData$totals[sheet==latestSheet$ST], file = "damageData_totals.csv")
 #rbindlist(data.table(a), data.table(b), use.names = T, fill = F)
+
+
+## Add Agri Manual losses ##
+a <- read_excel(iFile$GAD_MIMU_Census_CatDat, sheet = "R_import", skip = 6, trim_ws = T)
+
+b <- merge(LossCalc$results$ST, 
+           data.table(a)[,.(ST_Pcode, damagesAgriManual)],
+           all.x=T, by="ST_Pcode")
+if (sum(a$damagesAgriManual) != sum(b$damagesAgriManual, na.rm = T)) warning("Check NG: Not all damagesAgriManual values have been imported (sums do not match)")
+
+b[,damagesTotal:=damagesResi_mean+damagesAgriManual+damagesOtherCapstock]
+LossCalc$results$ST <- b
+
+
+rm(a,b)
+
 
 ## 4.4 PLOT DAMAGES ON MAP ----
 
@@ -549,47 +597,73 @@ a <- read_sf(dsn = iFile$GIS$inp$admn3_mimu$dsn,
 b <- merge(a, LossCalc$results$TS, by.x="TS_PCODE", by.y="TS_Pcode")
 c <- merge(b,LossCalc$results$ST, by.x="ST_PCODE", by.y="ST_Pcode")
 
+d <- read_sf(dsn = iFile$GIS$inp$adm1_mimu)
+
+e <- read_sf(dsn=iFile$GIS$inp$adm2_mimu)
+f <- merge(e, LossCalc$results$DT, by="DT_PCODE", all.x=T)
+g <- merge(f, LossCalc$results$ST, by.x="ST_PCODE", by.y="ST_Pcode", all.x=T)
+
+if("damagesAgriManual" %in% colnames(g)) g$damagesAgriStock.y <- g$damagesAgriManual
+
+  ## Tidy the data ##
+c$Tot_ppl[is.na(c$Tot_ppl)] <- 0  #replace NAs in affeted people with 0's
+c$affected_tot[is.na(c$affected_tot.x)] <- 0
+
+g$damagesTotal.x[ g$damagesTotal.x == 0 ] <- NA                    #.x indicates district values. .y indicates state values
+g$damagesResi_mean.y[ is.na(g$damagesResi_mean.y) ] <- 0
+g$damagesAgriStock.y[ is.na(g$damagesAgriStock.y) ] <- 0
+g$damagesOtherCapstock.y[ is.na(g$damagesOtherCapstock.y) ] <- 0
+
+
 
 myPalette <- list()
-myPalette$damages <- colorNumeric( palette = "YlOrBr", domain = c$damagesTotal.x, na.color = "transparent")
+myPalette$damages <- colorNumeric( palette = "YlOrBr", domain = g$damagesTotal.x, na.color = "transparent")
 
 
 myLab <- list()
-myLab$hov$TS <- paste("<b>TownShip</b>: ", c$T_NAME_M3, " (",c$TS, ")<br/>",
-                      "<b>State</b>: ", c$ST, "<br/>",
-                      "<b>Affected People (DDM)</b>: ", as.integer(c$Tot_ppl), "<br/>",
-                      "<b>% Pop. Affected</b>: ", round(c$affected_tot*100,0), "%<br/><br/>",
-                      "<b><u>State</u> Damages</b> (USD): (", c$ST, ")<br/>",
-                      "<i>Residential Buildings</i>: $", round(c$damagesResiCapstock_UCC.y/1e6,1), "m<br/>",
-                      "<i>Agriculture</i>: $", round(c$damagesAgriStock.y/1e6,1), "m<br/>",
-                      "<i>Other Sectors</i>: $", round(c$damagesOtherCapstock.y/1e6,1), "m<br/>",
+myLab$hov$DT <- paste("<b>District</b>: ", g$DT, " (",g$DT_Name_M3, ")<br/>",
+                      "<b>Affected People (DDM)</b>: ", formatC(g$reportedAffectedPpl.x,format = "d", big.mark = ","), "<br/>",
+                      "<b>% Pop. Affected</b>: ", round(g$affected_tot.x*100,1), "%<br/><br/>",
+                      "<b>State</b>: ", g$ST, "<br/>",
+                      "<b><u>State</u> Damages</b> (USD):<br/>",
+                      "<i>Residential Buildings</i>: $", round(g$damagesResi_mean.y/1e6,1), "m<br/>",
+                      "<i>Agriculture</i>: $", round(g$damagesAgriStock.y/1e6,1), "m<br/>",
+                      "<i>Other Sectors</i>: $", round(g$damagesOtherCapstock.y/1e6,1), "m",
                       sep="") %>%
   lapply(htmltools::HTML)
 
 myOptions <- highlightOptions(color="black", weight = 2, bringToFront = T, stroke = T, opacity = 1)
 
 
-GIS$m$damages <- leaflet(data = c) %>%
+GIS$m$damages <- leaflet(data = g) %>%
   addProviderTiles(providers$CartoDB.Positron) %>%
-  addPolygons(layerId = ~TS_PCODE,
+  addPolygons(layerId = ~DT_PCODE,                                                       #chloropleth
               color = ~myPalette$damages(damagesTotal.x), fillOpacity = 0.8,
               stroke = F,
-              label = myLab$hov$TS,
+              label = myLab$hov$DT,
               highlight=myOptions) %>%
-  addLegend(pal = myPalette$damages,
-            values = ~damagesTotal.x,
-            title = "Township Damages",
-            position = "bottomleft",
+  addPolygons(data=d,stroke = T,color = "grey",fill = F, opacity = 1, weight = 0.5) %>%  #admin 1 lines
+  addLegend("bottomleft", 
+            colors =c("#FFFFD4", "#FED98E", "#FE9929", "#D95F0E", "#993404"),
+            labels= c("minor", "","moderate","", "major"),
+            title= "District Damages",
             opacity = 0.9)
 GIS$m$damages
 
-rm(a,b,c)
+  # addLegend(pal = myPalette$damages,
+  #           values = ~damagesTotal.x,
+  #           title = "District Damages",
+  #           position = "bottomleft",
+  #           opacity = 0.9)
+
+
+rm(a,b,c,d,e)
 
 ## 6.0 SAVE OUTPUTS ---------------------------------------------------
 dir.create(file.path("outputs",oFolder), showWarnings = F)
-fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_22Aug_township.csv"))
-fwrite(LossCalc$results$ST, file = file.path("outputs", oFolder, "Damages_22Aug_state.csv"))
-write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_22Aug.csv"))
+fwrite(LossCalc$results$TS, file = file.path("outputs", oFolder, "Damages_23Aug_township.csv"))
+fwrite(LossCalc$results$ST, file = file.path("outputs", oFolder, "Damages_23Aug_state.csv"))
+write.csv(LossCalc$sums, file = file.path("outputs", oFolder, "sums_23Aug.csv"))
 save.image(file = file.path("outputs", oFolder, "allData.RData"))
 
 #saveWidget(GIS$m$damages, file = file.path("outputs", oFolder, "leafletMap.html"))
