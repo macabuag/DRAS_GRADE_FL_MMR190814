@@ -323,8 +323,17 @@ rm(a,b,c)
 ## 3.0 FLOW DATA -----------------------------------------------------------
 ## 3.1 READ SPREADSHEETS ----
 gaugeData <- list()
-gaugeData$raw <- data.table(read_excel(path = iFile$gauge, sheet = 1))
+gaugeData$long <- data.table(read_excel(path = iFile$gauge, sheet = 1))
+gaugeData$wide <- data.table(read_excel(path = iFile$gauge, sheet = "Sheet2"))
 
+a <- gaugeData$wide
+a[,`Distance to Danger Level (cm)`:=NULL]
+b <- gather(data = a, key = Date, value = `Distance to Danger Level (cm)`, names(a)[12:length(names(a))])
+b$Date <- as.Date(as.integer(b$Date), 
+                  origin = "1899-12-30") #https://www.r-bloggers.com/date-formats-in-r/
+
+gaugeData$long <- b
+rm(a,b)
 
 ## 3.2 ADD STATE NAME TO GAUGE POINTS ----
 ## read in shapefiles ##
@@ -335,13 +344,13 @@ GIS$inp$adm1_mimu <- st_read(dsn=iFile$GIS$inp$adm1_mimu)
 GIS$m$gaugePoints <- leaflet(data = ) %>%
   addTiles() %>%
   addPolygons(data=GIS$inp$adm1_mimu) %>%
-  addCircles(data = gaugeData$raw, lng = ~Lon, lat = ~Lat)
+  addCircles(data = gaugeData$long, lng = ~Lon, lat = ~Lat)
 #GIS$m$gaugePoints
 
 ## identify which stations in which admin 1 (spatial join on state) ##
-b <- st_as_sf(x = gaugeData$raw, coords = c("Lon", "Lat"),  #convert data.table with lat-long to spatial object
+b <- st_as_sf(x = gaugeData$long, coords = c("Lon", "Lat"),  #convert data.table with lat-long to spatial object
               crs=st_crs(GIS$inp$adm1_mimu))                #obtain the CRS of the admin layer to set other layers as the same
-nrow(gaugeData$raw)
+nrow(gaugeData$long)
 nrow(b)
 #st_is(b, "POINT")
 #View(b)
@@ -353,25 +362,37 @@ nrow(c)
 gaugeData$shp <- c
 gaugeData$shp$Lat <- st_coordinates(gaugeData$shp)[,2]
 gaugeData$shp$Lon <- st_coordinates(gaugeData$shp)[,1]
-gaugeData$raw <- data.table(gaugeData$shp)
+gaugeData$long <- data.table(gaugeData$shp)
 
 rm(b,c)
 
 
 ## 3.3 PLOT ----
-gaugeData$plots$all <- ggplot(data=gaugeData$raw) +
-  geom_line(aes(x=Date1, y = `Distance to Danger Level (cm)`,
-                colour=Lat, group=factor(Sr))) +
+
+
+gaugeData$plots$all <- ggplot(data=gaugeData$long[!is.na(ST)]) +
+  geom_line(aes(x=Date, y = `Distance to Danger Level (cm)`,
+                colour=Lat, group=factor(StationName))) +
   geom_hline(yintercept = 0, linetype="dashed", alpha=0.2) +
   coord_cartesian(expand = F) +
-  labs(title = "Flow Gauge Data", subtitle = iFile$gauge) +
-  theme_classic()
-gaugeData$plots$all
+  scale_x_date(breaks = as.Date(c("2019/7/5", "2019/7/19", "2019/8/2", "2019/8/16")),
+               labels = date_format("%d %b")) +
+  labs(title = "Flow Gauge Data", 
+       subtitle = "Data from Myanmar’s Department of Meteorology and Hydrology") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90),
+        legend.background = element_rect(colour = "black"),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+#gaugeData$plots$all
 
 gaugeData$plots$states <- gaugeData$plots$all +
   facet_wrap(.~ST)
-gaugeData$plots$states
+#gaugeData$plots$states
 
+jpeg(filename = "flowGauges.jpeg", width = 7, height = 6.5, units = "in", res = 300)
+  gaugeData$plots$states
+dev.off()
 
 ## 4.0 LOSSES ----------------------------------------------
 
@@ -703,8 +724,8 @@ rm(a,b)
 GIS <- list()
 GIS$m$flowTime <- leaflet() %>%
   addTiles() %>%
-  addMinicharts(lng = gaugeData$raw$Lon, lat = gaugeData$raw$Lat, chartdata = gaugeData$raw$`WaterLevel cm`,
-                showLabels = T, time = gaugeData$raw$Date1)
+  addMinicharts(lng = gaugeData$long$Lon, lat = gaugeData$long$Lat, chartdata = gaugeData$long$`WaterLevel cm`,
+                showLabels = T, time = gaugeData$long$Date1)
 #GIS$m$flowTime
 
 
@@ -741,7 +762,7 @@ g$damagesOtherCapstock.y[ is.na(g$damagesOtherCapstock.y) ] <- 0
 
 damages_ST$damagesTotal[ damages_ST$damagesTotal == 0 ] <- NA                   
 damages_ST$damagesResi_mean[ is.na(damages_ST$damagesResi_mean) ] <- 0
-damages_ST$damagesAgriStock[ is.na(damages_ST$damagesAgriStock) ] <- 0
+damages_ST$damagesAgriStock[ is.na(damages_ST$damagesAgriManual) ] <- 0
 damages_ST$damagesOtherCapstock[ is.na(damages_ST$damagesOtherCapstock) ] <- 0
 
 
@@ -770,10 +791,15 @@ myLab$hov$ST <- paste("<b>State</b>: ", damages_ST$ST, " (",damages_ST$NAME_M3, 
                       "</br>",
                       "<b>Estimated Damages</b> (USD):<br/>",
                       "<i>Residential Buildings</i>: $", round(damages_ST$damagesResi_mean/1e6,1), "m<br/>",
-                      "<i>Agriculture</i>: $", round(damages_ST$damagesAgriStock/1e6,1), "m<br/>",
+                      "<i>Agriculture</i>: $", round(damages_ST$damagesAgriManual/1e6,1), "m<br/>",
                       "<i>Other Sectors</i>: $", round(damages_ST$damagesOtherCapstock/1e6,1), "m",
                       sep="") %>%
   lapply(htmltools::HTML)
+
+
+damages_ST$damagesResi_mean[ damages_ST$damagesResi_mean==0 ] <- NA
+damages_ST$damagesAgriManual[ damages_ST$damagesAgriManual==0 ] <- NA
+damages_ST$damagesOtherCapstock[ damages_ST$damagesOtherCapstock==0 ] <- NA
 
 
 
@@ -788,25 +814,27 @@ GIS$m$damages$ST <- leaflet(data = damages_ST) %>%
   addPolygons(layerId = ~paste0(ST_PCODE,"_tot"),                                                       #chloropleth
               color = ~myPalette$bin$tot(damagesTotal), fillOpacity = 0.8,
               stroke = F,
-              label = myLab$hov$ST,
+              # label = myLab$hov$ST,
+              highlight=myOptions,
               group = "Total",
-              highlight=myOptions) %>%
+              popup = myLab$hov$ST,
+              popupOptions = myOptions) %>%
   addPolygons(layerId = ~paste0(ST_PCODE,"_res"),                                                       #chloropleth
               color = ~myPalette$bin$resi(damagesResi_mean), fillOpacity = 0.8,
               stroke = F,
               group = "Resi",
-              label = myLab$hov$ST,
+              popup = myLab$hov$ST,
               highlight=myOptions) %>%
   addPolygons(layerId = ~paste0(ST_PCODE,"_agr"),                                                       #chloropleth
               color = ~myPalette$bin$agri(damagesAgriManual), fillOpacity = 0.8,
               stroke = F,
-              label = myLab$hov$ST,
+              popup = myLab$hov$ST,
               group = "Agri",
               highlight=myOptions) %>%
   addPolygons(layerId = ~paste0(ST_PCODE,"_oth"),                                                       #chloropleth
               color = ~myPalette$bin$other(damagesOtherCapstock), fillOpacity = 0.8,
               stroke = F,
-              label = myLab$hov$ST,
+              popup = myLab$hov$ST,
               group = "Other",
               highlight=myOptions) %>%
   addLegend(pal = myPalette$bin$other,
@@ -820,7 +848,7 @@ GIS$m$damages$ST <- leaflet(data = damages_ST) %>%
             opacity = 0.9) %>%
   addLegend(pal = myPalette$bin$agri,
             values = ~damagesAgriManual,
-            title = "Agri. Damages ($)",
+            title = "Agric. Damages ($)",
             position = "bottomleft",
             group = "Agri",
             labFormat = function(type, cuts, p) {  # https://stackoverflow.com/questions/47410833/how-to-customize-legend-labels-in-r-leaflet
@@ -829,7 +857,7 @@ GIS$m$damages$ST <- leaflet(data = damages_ST) %>%
             opacity = 0.9) %>%
   addLegend(pal = myPalette$bin$resi,
             values = ~damagesResi_mean,
-            title = "Resi. Damages ($)",
+            title = "Resid. Damages ($)",
             position = "bottomleft",
             group = "Resi",
             labFormat = function(type, cuts, p) {  # https://stackoverflow.com/questions/47410833/how-to-customize-legend-labels-in-r-leaflet
@@ -853,11 +881,11 @@ GIS$m$damages$ST
 
 
 
-addLegend("bottomleft",
-          colors =c("#FFFFD4", "#FED98E", "#FE9929", "#D95F0E", "#993404"),
-          labels= c("minor", "","moderate","", "major"),
-          title= "District Damages",
-          opacity = 0.9)
+# addLegend("bottomleft",
+#           colors =c("#FFFFD4", "#FED98E", "#FE9929", "#D95F0E", "#993404"),
+#           labels= c("minor", "","moderate","", "major"),
+#           title= "District Damages",
+#           opacity = 0.9)
 
 
 
@@ -894,10 +922,10 @@ rm(a,b,c,d,e)
 # save.image(file = file.path("outputs", oFolder, "allData.RData"))
 
  layout=matrix(c(rep(1, 3), rep(2,4)), nrow = 1)
-# jpeg(filename = "test.jpg", width = 7, height = 3, units = "in", res = 300)
-# multiplot(damageData$plots$totals_ppl, damageData$plots$trends_ppl,
-#           layout = layout)
-# dev.off()
+jpeg(filename = "test.jpg", width = 7, height = 4, units = "in", res = 300)
+multiplot(damageData$plots$totals_ppl, damageData$plots$trends_ppl,
+          layout = layout)
+dev.off()
 
 
 #saveWidget(GIS$m$damages, file = file.path("outputs", oFolder, "leafletMap.html"))
